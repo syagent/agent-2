@@ -5,7 +5,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 version="1.0.5"
 
-if [ -f /etc/syAgent/sa-auth.log ]; then
+if [ -f /etc/syAgent/sa-auth.log ];
+then
   token_file=($(cat /etc/syAgent/sa-auth.log))
 else
   echo "Error: Auth file required"
@@ -106,7 +107,8 @@ disk_usage=$(sed_rt $(to_num "$(($(df -P -B 1 | grep '^/' | awk '{ print $3 }' |
 
 disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' | sed -e :a -e '$!N;s/\n/ /;ta' | awk '{ print $0 } END { if (!NR) print "N/A" }')")
 
-if [ -n "$(command -v ss)" ]; then
+if [ -n "$(command -v ss)" ];
+then
   connections=$(sed_rt $(to_num "$(ss -tun | tail -n +2 | wc -l)"))
 else
   connections=$(sed_rt $(to_num "$(netstat -tun | tail -n +3 | wc -l)"))
@@ -137,26 +139,31 @@ cpu=$((${stat[0]} + ${stat[1]} + ${stat[2]} + ${stat[3]}))
 io=$((${stat[3]} + ${stat[4]}))
 idle=${stat[3]}
 
-if [ -e /etc/syAgent/pe-data.log ]; then
+if [ -e /etc/syAgent/pe-data.log ];
+then
   data=($(cat /etc/syAgent/pe-data.log))
   interval=$(($time - ${data[0]}))
   cpu_gap=$(($cpu - ${data[1]}))
   io_gap=$(($io - ${data[2]}))
   idle_gap=$(($idle - ${data[3]}))
 
-  if [[ $cpu_gap > "0" ]]; then
+  if [[ $cpu_gap > "0" ]];
+  then
     load_cpu=$(((1000 * ($cpu_gap - $idle_gap) / $cpu_gap + 5) / 10))
   fi
 
-  if [[ $io_gap > "0" ]]; then
+  if [[ $io_gap > "0" ]];
+  then
     load_io=$(((1000 * ($io_gap - $idle_gap) / $io_gap + 5) / 10))
   fi
 
-  if [[ $rx > ${data[4]} ]]; then
+  if [[ $rx > ${data[4]} ]];
+  then
     rx_gap=$(($rx - ${data[4]}))
   fi
 
-  if [[ $tx > ${data[5]} ]]; then
+  if [[ $tx > ${data[5]} ]];
+  then
     tx_gap=$(($tx - ${data[5]}))
   fi
 fi
@@ -170,7 +177,8 @@ load_io=$(sed_rt $(to_num "$load_io"))
 
 multipart_data="token=${token_file[0]}&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io")"
 
-if [ -n "$(command -v timeout)" ]; thenpost
+if [ -n "$(command -v timeout)" ]
+then
   timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 ---data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
 else
   wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
