@@ -179,7 +179,7 @@ multipart_data="token=${token_file[0]}&data=$(to_base64 "$version") $(to_base64 
 
 if [ -n "$(command -v timeout)" ]
 then
-  timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 ---data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
+  timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
 else
   wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
   wget_process_id=$!
