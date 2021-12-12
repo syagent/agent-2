@@ -25,7 +25,7 @@ Monitored Data
             SWAP usage
 
 ### Disk
-* Disk array,
+* Disk list,
             Disk total,
             Disk usage
 
