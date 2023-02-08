@@ -80,6 +80,11 @@ cpu_name=$(sed_rt "$(cat /proc/cpuinfo | grep 'model name' | awk -F\: '{ print $
 cpu_cores=$(sed_rt "$(($(cat /proc/cpuinfo | grep 'model name' | awk -F\: '{ print $2 }' | sed -e :a -e '$!N;s/\n/\|/;ta' | tr -cd \| | wc -c) + 1))")
 
 if [ -z "$cpu_name" ]; then
+	cpu_name=$(sed_rt "$(lscpu | grep "Model name" | awk -F\: '{ print $2 }')")
+	cpu_cores=$(sed_rt "$(lscpu | grep "Core(s) per cluster" | awk -F\: '{ print $2 }')")
+fi
+
+if [ -z "$cpu_name" ]; then
   cpu_name=$(sed_rt "$(cat /proc/cpuinfo | grep 'vendor_id' | awk -F\: '{ print $2 } END { if (!NR) print "N/A" }')")
   cpu_cores=$(sed_rt "$(($(cat /proc/cpuinfo | grep 'vendor_id' | awk -F\: '{ print $2 }' | sed -e :a -e '$!N;s/\n/\|/;ta' | tr -cd \| | wc -c) + 1))")
 fi
