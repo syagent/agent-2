@@ -1,9 +1,9 @@
 #!/bin/bash
-# @version		1.0.5
+# @version		1.0.6
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-version="1.0.5"
+version="1.0.6"
 
 if [ -f /etc/syAgent/sa-auth.log ];
 then
