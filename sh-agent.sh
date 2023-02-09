@@ -84,6 +84,11 @@ if [ -z "$cpu_name" ]; then
   cpu_cores=$(sed_rt "$(($(cat /proc/cpuinfo | grep 'vendor_id' | awk -F\: '{ print $2 }' | sed -e :a -e '$!N;s/\n/\|/;ta' | tr -cd \| | wc -c) + 1))")
 fi
 
+if [ -z "$cpu_name" ]; then
+	cpu_name=$(sed_rt "$(lscpu | grep "Model name" | awk -F\: '{ print $2 }')")
+	cpu_cores=$(sed_rt "$(lscpu | grep "Core(s) per cluster" | awk -F\: '{ print $2 }')")
+fi
+
 cpu_freq=$(sed_rt "$(cat /proc/cpuinfo | grep 'cpu MHz' | awk -F\: '{ print $2 }')")
 
 if [ -z "$cpu_freq" ]; then
