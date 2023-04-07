@@ -96,7 +96,7 @@ fi
 
 mkdir -p /etc/syAgent
 
-printBold "|   Downloading sh-agent.sh to /etc/syAgent\n|\n|   + $(wget -nv -o /dev/stdout -O /etc/syAgent/sh-agent.sh --no-check-certificate https://raw.githubusercontent.com/syagent/agent-2/main/sh-agent.sh)"
+printBold "|   Downloading sh-agent.sh to /etc/syAgent\n|\n|   + $(wget -nv -o /dev/stdout -O /etc/syAgent/sh-agent.sh --no-check-certificate https://raw.githubusercontent.com/syagent/agent-2/disks/sh-agent.sh)"
 
 if [ -f /etc/syAgent/sh-agent.sh ]; then
   echo "$1" >/etc/syAgent/sa-auth.log
