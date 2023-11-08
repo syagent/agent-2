@@ -114,7 +114,7 @@ disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' 
 
 #docker stats
 if command -v docker &> /dev/null; then
-    docker_stats=$(docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" | tail -n +2 | tr '\n' ' ')
+    docker_stats=$(docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
 else
     docker_stats=""
 fi
