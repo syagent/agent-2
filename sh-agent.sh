@@ -1,5 +1,5 @@
 #!/bin/bash
-# @version		1.0.8
+# @version		1.0.9
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -124,7 +124,8 @@ disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' 
 
 if /usr/bin/docker stats &> /dev/null; then
   docker_stats=$(/usr/bin/docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
-else docker_stats=""
+else
+  docker_stats=""
 fi
 
 
