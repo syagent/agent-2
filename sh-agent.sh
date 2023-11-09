@@ -3,6 +3,9 @@
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+export PATH=/usr/local/bin:/usr/bin:/bin
+export DOCKER_HOST=unix:///var/run/docker.sock
+
 version="1.0.7"
 
 if [ -f /etc/syAgent/sa-auth.log ]; then
@@ -113,11 +116,17 @@ disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' 
 
 
 #docker stats
-if command -v docker &> /dev/null; then
-    docker_stats=$(docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
-else
-    docker_stats=""
+#if command -v docker &> /dev/null; then
+#    docker_stats=$(docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
+#else
+#    docker_stats=""
+#fi
+
+if /usr/bin/docker stats &> /dev/null; then
+  docker_stats=$(/usr/bin/docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
+else docker_stats=""
 fi
+
 
 # apps
 get_version() {
