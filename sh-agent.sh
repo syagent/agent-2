@@ -256,19 +256,10 @@ load_io=$(sed_rt $(to_num "$load_io"))
 gpu_info=""
 
 if command -v nvidia-smi &> /dev/null; then
-  # Query basic info for all GPUs
   raw_gpu_info=$(nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits)
 
-  while IFS= read -r line; do
-    gpu_index=$(echo $line | awk -F, '{print $1}' | sed_rt)
-    gpu_name=$(echo $line | awk -F, '{print $2}' | sed_rt)
-    gpu_util=$(echo $line | awk -F, '{print $3}' | sed_rt)
-    mem_util=$(echo $line | awk -F, '{print $4}' | sed_rt)
-    mem_total=$(echo $line | awk -F, '{print $5}' | sed_rt)
-    mem_used=$(echo $line | awk -F, '{print $6}' | sed_rt)
-    temp=$(echo $line | awk -F, '{print $7}' | sed_rt)
-
-    gpu_info+="gpu_index:$gpu_index,gpu_name:$gpu_name,gpu_util:$gpu_util,mem_util:$mem_util,mem_total:$mem_total,mem_used:$mem_used,temp:$temp;"
+  while IFS=',' read -r gpu_index gpu_name gpu_util mem_util mem_total mem_used temp; do
+    gpu_info+="gpu_index:$(sed_rt "$gpu_index"),gpu_name:$(sed_rt "$gpu_name"),gpu_util:$(sed_rt "$gpu_util"),mem_util:$(sed_rt "$mem_util"),mem_total:$(sed_rt "$mem_total"),mem_used:$(sed_rt "$mem_used"),temp:$(sed_rt "$temp");"
   done <<< "$raw_gpu_info"
 else
   gpu_info="nvidia-smi not available"
@@ -279,16 +270,9 @@ gpu_procs_info=""
 if command -v nvidia-smi &> /dev/null; then
   raw_proc_info=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits)
 
-  while IFS= read -r proc_line; do
-    gpu_uuid=$(echo "$proc_line" | awk -F, '{print $1}' | sed_rt)
-    pid=$(echo "$proc_line" | awk -F, '{print $2}' | sed_rt)
-    pname=$(echo "$proc_line" | awk -F, '{print $3}' | sed_rt)
-    used_mem=$(echo "$proc_line" | awk -F, '{print $4}' | sed_rt)
-
-    # Try to resolve user from PID
-    user=$(ps -o user= -p "$pid" 2>/dev/null | sed_rt)
-
-    gpu_procs_info+="gpu_uuid:$gpu_uuid,pid:$pid,user:$user,process:$pname,used_mem:$used_mem;"
+  while IFS=',' read -r gpu_uuid pid pname used_mem; do
+    user=$(ps -o user= -p "$(sed_rt "$pid")" 2>/dev/null | sed_rt)
+    gpu_procs_info+="gpu_uuid:$(sed_rt "$gpu_uuid"),pid:$(sed_rt "$pid"),user:$user,process:$(sed_rt "$pname"),used_mem:$(sed_rt "$used_mem");"
   done <<< "$raw_proc_info"
 else
   gpu_procs_info="nvidia-smi not available"
