@@ -115,18 +115,6 @@ disk_usage=$(sed_rt $(to_num "$(($(df -P -B 1 | grep '^/' | awk '{ print $3 }' |
 disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' | sed -e :a -e '$!N;s/\n/ /;ta' | awk '{ print $0 } END { if (!NR) print "N/A" }')")
 
 
-#docker stats
-#if command -v docker &> /dev/null; then
-#    docker_stats=$(docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
-#else
-#    docker_stats=""
-#fi
-
-if /usr/bin/docker stats &> /dev/null; then
-  docker_stats=$(/usr/bin/docker stats --no-stream --format "container_name:{{.Name}},container_cpu:{{.CPUPerc}},container_mem:{{.MemUsage}},container_net_io:{{.NetIO}}" 2>&1)
-else
-  docker_stats=""
-fi
 
 
 # apps
@@ -265,7 +253,7 @@ tx_gap=$(sed_rt $(to_num "$tx_gap"))
 load_cpu=$(sed_rt $(to_num "$load_cpu"))
 load_io=$(sed_rt $(to_num "$load_io"))
 
-multipart_data="token=${token_file[0]}&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$docker_stats") $(to_base64 "nginx_version:$nginx_version,apache_version:$apache_version,mysql_version:$mysql_version,postgres_version:$postgres_version,mongo_version:$mongo_version,php_version:$php_version,docker_version:$docker_version,python_version:$python_version,perl_version:$perl_version,ruby_version:$ruby_version,java_version:$java_version,gcc_version:$gcc_version,gpp_version:$gpp_version,redis_version:$redis_version,kafka_version:$kafka_version,rabbitmq_version:$rabbitmq_version") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts")"
+multipart_data="token=${token_file[0]}&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "nginx_version:$nginx_version,apache_version:$apache_version,mysql_version:$mysql_version,postgres_version:$postgres_version,mongo_version:$mongo_version,php_version:$php_version,docker_version:$docker_version,python_version:$python_version,perl_version:$perl_version,ruby_version:$ruby_version,java_version:$java_version,gcc_version:$gcc_version,gpp_version:$gpp_version,redis_version:$redis_version,kafka_version:$kafka_version,rabbitmq_version:$rabbitmq_version") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts")"
 
 if [ -n "$(command -v timeout)" ]; then
   timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://free-decent-boar.ngrok-free.app/agent"
