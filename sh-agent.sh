@@ -130,6 +130,11 @@ cpu_cores=${cpu_cores:-0}
 escaped_processes_list=$(echo "${processes_list:-}" | jq -Rs .)
 escaped_disk_array=$(echo "${disk_array:-}" | jq -Rs .)
 
+escaped_processes_list=${escaped_processes_list:-"\"\""}
+escaped_disk_array=${escaped_disk_array:-"\"\""}
+gpu_info=${gpu_info:-"\"\""}
+gpu_procs_info=${gpu_procs_info:-"\"\""}
+
 json_payload=$(cat <<EOF
 {
   "token": "${token_file[0]}",
@@ -190,6 +195,8 @@ json_payload=$(cat <<EOF
 }
 EOF
 )
+
+echo "$json_payload" > /etc/syAgent/agent_payload_debug.json
 
 # Validate JSON before sending
 if echo "$json_payload" | jq . > /dev/null 2>&1; then
