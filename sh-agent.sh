@@ -1,5 +1,5 @@
 #!/bin/bash
-# @version 1.1.0 - JSON payload version
+# @version 1.1.1 - JSON payload version with proper escaping
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH=/usr/local/bin:/usr/bin:/bin
@@ -26,7 +26,7 @@ function to_num() {
 uptime=$(sed_rt $(cut -d. -f1 /proc/uptime))
 sessions=$(who | wc -l)
 processes=$(ps axc | wc -l)
-processes_list=$(ps axc -o uname:12,pcpu,rss,cmd --sort=-pcpu,-rss --noheaders --width 120 | grep -v " ps$" | sed '/^$/d' | tr "\n" ";" | sed 's/"/\\"/g')
+processes_list=$(ps axc -o uname:12,pcpu,rss,cmd --sort=-pcpu,-rss --noheaders --width 120 | grep -v " ps$" | sed '/^$/d' | tr "\n" ";")
 
 file_handles=$(cut -f1 /proc/sys/fs/file-nr)
 file_handles_limit=$(cut -f3 /proc/sys/fs/file-nr)
@@ -58,7 +58,7 @@ swap_usage=$((swap_total - swap_free))
 
 disk_total=$(df -P -B1 | awk '$1 ~ /^\// {sum += $2} END {print sum}')
 disk_usage=$(df -P -B1 | awk '$1 ~ /^\// {sum += $3} END {print sum}')
-disk_array=$(df -P -B1 | awk '$1 ~ /^\// {print $1" "$2" "$3";"}' | tr '\n' ' ' | sed 's/"/\\"/g')
+disk_array=$(df -P -B1 | awk '$1 ~ /^\// {print $1" "$2" "$3";"}' | tr '\n' ' ')
 
 get_version() {
   version=$($1 2>&1)
@@ -109,34 +109,31 @@ rx=$(cat /sys/class/net/$nic/statistics/rx_bytes)
 tx=$(cat /sys/class/net/$nic/statistics/tx_bytes)
 
 load=$(cut -d' ' -f1-3 /proc/loadavg)
-time=$(date +%s)
-
-load_cpu=0
-load_io=0
-rx_gap=0
-tx_gap=0
 
 # GPU Stats
 if command -v nvidia-smi &> /dev/null; then
-  gpu_info=$(nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits | tr '\n' ';' | sed 's/"/\\"/g')
+  gpu_info=$(nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits | jq -Rs .)
   gpu_procs_info=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits | while IFS= read -r line; do
     pid=$(echo $line | cut -d, -f2 | sed_rt)
     user=$(ps -o user= -p "$pid" 2>/dev/null | sed_rt)
     echo "$line,user:$user"
-  done | tr '\n' ';' | sed 's/"/\\"/g')
+  done | jq -Rs .)
 else
-  gpu_info="Unavailable"
-  gpu_procs_info="Unavailable"
+  gpu_info="\"Unavailable\""
+  gpu_procs_info="\"Unavailable\""
 fi
+
+escaped_processes_list=$(echo "$processes_list" | jq -Rs .)
+escaped_disk_array=$(echo "$disk_array" | jq -Rs .)
 
 json_payload=$(cat <<EOF
 {
   "token": "${token_file[0]}",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "uptime": $uptime,
   "sessions": $sessions,
   "processes": $processes,
-  "processes_list": "$processes_list",
+  "processes_list": $escaped_processes_list,
   "file_handles": $file_handles,
   "file_handles_limit": $file_handles_limit,
   "os_kernel": "$os_kernel",
@@ -149,7 +146,7 @@ json_payload=$(cat <<EOF
   "ram_usage": $ram_usage,
   "swap_total": $swap_total,
   "swap_usage": $swap_usage,
-  "disk_array": "$disk_array",
+  "disk_array": $escaped_disk_array,
   "disk_total": $disk_total,
   "disk_usage": $disk_usage,
   "connections": 0,
@@ -159,8 +156,8 @@ json_payload=$(cat <<EOF
   "rx": $rx,
   "tx": $tx,
   "load": "$load",
-  "load_cpu": $load_cpu,
-  "load_io": $load_io,
+  "load_cpu": 0,
+  "load_io": 0,
   "versions": {
     "nginx": "$nginx_version",
     "apache": "$apache_version",
@@ -184,8 +181,8 @@ json_payload=$(cat <<EOF
     "success": $success_attempts,
     "failed": $failed_attempts
   },
-  "gpu_info": "$gpu_info",
-  "gpu_procs_info": "$gpu_procs_info"
+  "gpu_info": $gpu_info,
+  "gpu_procs_info": $gpu_procs_info
 }
 EOF
 )
