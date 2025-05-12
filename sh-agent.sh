@@ -1,5 +1,5 @@
 #!/bin/bash
-# @version 1.1.1 - JSON payload version with proper escaping
+# @version 1.1.2 - JSON payload version with defaults for missing values
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH=/usr/local/bin:/usr/bin:/bin
@@ -62,22 +62,22 @@ disk_array=$(df -P -B1 | awk '$1 ~ /^\// {print $1" "$2" "$3";"}' | tr '\n' ' ')
 
 get_version() {
   version=$($1 2>&1)
-  [ $? -eq 0 ] && echo "$version" | awk '{print $3}' || echo "N/A"
+  [ $? -eq 0 ] && echo "$version" | awk '{print $3}' || echo ""
 }
 
 get_db_version() {
   version=$($1 --version 2>&1)
-  [ $? -eq 0 ] && echo "$version" | head -n 1 | awk '{print $3}' || echo "N/A"
+  [ $? -eq 0 ] && echo "$version" | head -n 1 | awk '{print $3}' || echo ""
 }
 
 get_language_version() {
   version=$($1 --version 2>&1)
-  [ $? -eq 0 ] && echo "$version" | head -n 1 | awk '{print $3}' || echo "N/A"
+  [ $? -eq 0 ] && echo "$version" | head -n 1 | awk '{print $3}' || echo ""
 }
 
 get_nodejs_version() {
   version=$(node --version 2>&1)
-  [ $? -eq 0 ] && echo "$version" || echo "N/A"
+  [ $? -eq 0 ] && echo "$version" || echo ""
 }
 
 nginx_version=$(get_version "nginx -v")
@@ -111,6 +111,8 @@ tx=$(cat /sys/class/net/$nic/statistics/tx_bytes)
 load=$(cut -d' ' -f1-3 /proc/loadavg)
 
 # GPU Stats
+gpu_info=""
+gpu_procs_info=""
 if command -v nvidia-smi &> /dev/null; then
   gpu_info=$(nvidia-smi --query-gpu=index,name,utilization.gpu,utilization.memory,memory.total,memory.used,temperature.gpu --format=csv,noheader,nounits | jq -Rs .)
   gpu_procs_info=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits | while IFS= read -r line; do
@@ -119,67 +121,69 @@ if command -v nvidia-smi &> /dev/null; then
     echo "$line,user:$user"
   done | jq -Rs .)
 else
-  gpu_info="\"Unavailable\""
-  gpu_procs_info="\"Unavailable\""
+  gpu_info="\"\""
+  gpu_procs_info="\"\""
 fi
 
-escaped_processes_list=$(echo "$processes_list" | jq -Rs .)
-escaped_disk_array=$(echo "$disk_array" | jq -Rs .)
+cpu_freq=${cpu_freq:-0}
+cpu_cores=${cpu_cores:-0}
+escaped_processes_list=$(echo "${processes_list:-}" | jq -Rs .)
+escaped_disk_array=$(echo "${disk_array:-}" | jq -Rs .)
 
 json_payload=$(cat <<EOF
 {
   "token": "${token_file[0]}",
-  "version": "1.1.1",
-  "uptime": $uptime,
-  "sessions": $sessions,
-  "processes": $processes,
+  "version": "1.1.2",
+  "uptime": ${uptime:-0},
+  "sessions": ${sessions:-0},
+  "processes": ${processes:-0},
   "processes_list": $escaped_processes_list,
-  "file_handles": $file_handles,
-  "file_handles_limit": $file_handles_limit,
-  "os_kernel": "$os_kernel",
-  "os_name": "$os_name",
-  "os_arch": "$os_arch",
-  "cpu_name": "$cpu_name",
-  "cpu_cores": $cpu_cores,
-  "cpu_freq": $cpu_freq,
-  "ram_total": $ram_total,
-  "ram_usage": $ram_usage,
-  "swap_total": $swap_total,
-  "swap_usage": $swap_usage,
+  "file_handles": ${file_handles:-0},
+  "file_handles_limit": ${file_handles_limit:-0},
+  "os_kernel": "${os_kernel:-}",
+  "os_name": "${os_name:-}",
+  "os_arch": "${os_arch:-}",
+  "cpu_name": "${cpu_name:-}",
+  "cpu_cores": ${cpu_cores},
+  "cpu_freq": ${cpu_freq},
+  "ram_total": ${ram_total:-0},
+  "ram_usage": ${ram_usage:-0},
+  "swap_total": ${swap_total:-0},
+  "swap_usage": ${swap_usage:-0},
   "disk_array": $escaped_disk_array,
-  "disk_total": $disk_total,
-  "disk_usage": $disk_usage,
+  "disk_total": ${disk_total:-0},
+  "disk_usage": ${disk_usage:-0},
   "connections": 0,
-  "nic": "$nic",
-  "ipv4": "$ipv4",
-  "ipv6": "$ipv6",
-  "rx": $rx,
-  "tx": $tx,
-  "load": "$load",
+  "nic": "${nic:-}",
+  "ipv4": "${ipv4:-}",
+  "ipv6": "${ipv6:-}",
+  "rx": ${rx:-0},
+  "tx": ${tx:-0},
+  "load": "${load:-}",
   "load_cpu": 0,
   "load_io": 0,
   "versions": {
-    "nginx": "$nginx_version",
-    "apache": "$apache_version",
-    "mysql": "$mysql_version",
-    "postgres": "$postgres_version",
-    "mongo": "$mongo_version",
-    "php": "$php_version",
-    "docker": "$docker_version",
-    "python": "$python_version",
-    "perl": "$perl_version",
-    "ruby": "$ruby_version",
-    "java": "$java_version",
-    "gcc": "$gcc_version",
-    "gpp": "$gpp_version",
-    "redis": "$redis_version",
-    "kafka": "$kafka_version",
-    "rabbitmq": "$rabbitmq_version",
-    "nodejs": "$nodejs_version"
+    "nginx": "${nginx_version:-}",
+    "apache": "${apache_version:-}",
+    "mysql": "${mysql_version:-}",
+    "postgres": "${postgres_version:-}",
+    "mongo": "${mongo_version:-}",
+    "php": "${php_version:-}",
+    "docker": "${docker_version:-}",
+    "python": "${python_version:-}",
+    "perl": "${perl_version:-}",
+    "ruby": "${ruby_version:-}",
+    "java": "${java_version:-}",
+    "gcc": "${gcc_version:-}",
+    "gpp": "${gpp_version:-}",
+    "redis": "${redis_version:-}",
+    "kafka": "${kafka_version:-}",
+    "rabbitmq": "${rabbitmq_version:-}",
+    "nodejs": "${nodejs_version:-}"
   },
   "ssh_attempts": {
-    "success": $success_attempts,
-    "failed": $failed_attempts
+    "success": ${success_attempts:-0},
+    "failed": ${failed_attempts:-0}
   },
   "gpu_info": $gpu_info,
   "gpu_procs_info": $gpu_procs_info
@@ -187,9 +191,15 @@ json_payload=$(cat <<EOF
 EOF
 )
 
-curl -s -X POST "https://free-decent-boar.ngrok-free.app/agent" \
-  -H "Content-Type: application/json" \
-  -d "$json_payload" \
-  -o /etc/syAgent/sh-agent.log
+# Validate JSON before sending
+if echo "$json_payload" | jq . > /dev/null 2>&1; then
+  curl -s -X POST "https://free-decent-boar.ngrok-free.app/agent" \
+    -H "Content-Type: application/json" \
+    --data-binary "$json_payload" \
+    -o /etc/syAgent/sh-agent.log
+else
+  echo "Invalid JSON payload. Skipping send."
+  exit 1
+fi
 
 exit 0
