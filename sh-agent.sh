@@ -270,10 +270,14 @@ gpu_procs_info=""
 if command -v nvidia-smi &> /dev/null; then
   raw_proc_info=$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits)
 
-  while IFS=',' read -r gpu_uuid pid pname used_mem; do
-    user=$(ps -o user= -p "$(sed_rt "$pid")" 2>/dev/null | sed_rt)
-    gpu_procs_info+="gpu_uuid:$(sed_rt "$gpu_uuid"),pid:$(sed_rt "$pid"),user:$user,process:$(sed_rt "$pname"),used_mem:$(sed_rt "$used_mem");"
-  done <<< "$raw_proc_info"
+  if [ -n "$raw_proc_info" ]; then
+    while IFS=',' read -r gpu_uuid pid pname used_mem; do
+      user=$(ps -o user= -p "$(sed_rt "$pid")" 2>/dev/null | sed_rt)
+      gpu_procs_info+="gpu_uuid:$(sed_rt "$gpu_uuid"),pid:$(sed_rt "$pid"),user:$user,process:$(sed_rt "$pname"),used_mem:$(sed_rt "$used_mem");"
+    done <<< "$raw_proc_info"
+  else
+    gpu_procs_info="no active GPU processes"
+  fi
 else
   gpu_procs_info="nvidia-smi not available"
 fi
