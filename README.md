@@ -43,7 +43,19 @@ Monitored Data
 ### File
 * File handle count,
             File handle limit
-            
+
+### GPU
+* GPU identifier,
+            GPU memory total,
+            GPU memory usage,
+            GPU load
+
+### Apps
+* App name,
+            App version
+### SSH
+
+
 
 ### Misc
 * Agent version,
