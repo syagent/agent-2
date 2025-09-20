@@ -175,10 +175,6 @@ sudo rm -rf /etc/syAgent
 
 We welcome contributions! Please feel free to submit issues, feature requests, or pull requests.
 
-## License
-
-This project is open source. Please check the repository for license details.
-
 ## Support
 
 - **Issues**: Report bugs or request features via GitHub issues
