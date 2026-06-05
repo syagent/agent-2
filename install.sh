@@ -1,5 +1,5 @@
 #!/bin/bash
-# @version		1.0.9
+# @version		1.1.0
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -16,13 +16,13 @@ function printBold() {
 }
 
 function fail() {
-  printRed $1
+  printRed "$1"
   exit 1
 }
 
 printBold "|\n|   SyAgent Installer\n| =\n|"
 
-if [ $(id -u) != "0" ]; then
+if [ "$(id -u)" != "0" ]; then
   fail "|\n| Error: Please run the agent as root\n| \tThe agent will NOT run as root but root required to make the installation success\n|"
 fi
 
@@ -39,35 +39,53 @@ then
 	fail "|\n| Usage: bash $0 'token'\n|"
 fi
 
-if [ ! -n "$(command -v crontab)" ]; then
+if [ -z "$(command -v wget)" ]; then
+  fail "|\n| Error: wget is required to download the syAgent script\n|"
+fi
+
+function answer_yes() {
+  [ -z "$1" ] || [ "$1" = "Y" ] || [ "$1" = "y" ]
+}
+
+function remove_agent_cron() {
+  local cron_user="$1"
+  local existing_cron
+
+  existing_cron="$(crontab -u "$cron_user" -l 2>/dev/null || true)"
+  printf "%s\n" "$existing_cron" | grep -v "/etc/syAgent/sh-agent.sh" | crontab -u "$cron_user" -
+}
+
+if [ -z "$(command -v crontab)" ]; then
 
   echo "|" && read -p "|   SyAgent needs cron. Do you want to install it? [Y/n] " input_variable_install
 
-  if [ -z $input_variable_install ] || [ $input_variable_install == "Y" ] || [ $input_variable_install == "y" ]; then
+  if answer_yes "$input_variable_install"; then
     if [ -n "$(command -v apt-get)" ]; then
       apt-get -y update
       apt-get -y install cron
     elif [ -n "$(command -v pacman)" ]; then
       pacman -S --noconfirm cronie
-    fi
     elif [ -n "$(command -v yum)" ]; then
       yum -y install cronie
 
-      if [ ! -n "$(command -v crontab)" ]; then
+      if [ -z "$(command -v crontab)" ]; then
         yum -y install vixie-cron
       fi
+    else
+      fail "|\n|   Error: Cannot find a supported package manager to install CronTab\n|"
+    fi
   fi
 
-  if [ ! -n "$(command -v crontab)" ]; then
+  if [ -z "$(command -v crontab)" ]; then
     fail "|\n|   Error: Cannot install CronTab, please install the CronTab and run the script again\n|"
   fi
 fi
 
-if [ -z "$(ps -Al | grep cron | grep -v grep)" ]; then
+if ! ps -Al | grep -q "[c]ron"; then
 
   echo "|" && read -p "|   Cron is is down. Do you want to start it? [Y/n] " input_variable_service
 
-  if [ -z $input_variable_service ] || [ $input_variable_service == "Y" ] || [ $input_variable_service == "y" ]; then
+  if answer_yes "$input_variable_service"; then
     if [ -n "$(command -v apt-get)" ]; then
       service cron start
     elif [ -n "$(command -v yum)" ]; then
@@ -79,18 +97,22 @@ if [ -z "$(ps -Al | grep cron | grep -v grep)" ]; then
     fi
   fi
 
-  if [ -z "$(ps -Al | grep cron | grep -v grep)" ]; then
+  if ! ps -Al | grep -q "[c]ron"; then
     fail "|\n|   Error: Error when trying to start the Cron\n|"
   fi
+fi
+
+if id -u syAgent >/dev/null 2>&1; then
+  remove_agent_cron syAgent
+else
+  remove_agent_cron root
 fi
 
 if [ -f /etc/syAgent/sh-agent.sh ]; then
   rm -Rf /etc/syAgent
 
   if id -u syAgent >/dev/null 2>&1; then
-    (crontab -u syAgent -l | grep -v "/etc/syAgent/sh-agent.sh") | crontab -u syAgent - && userdel syAgent
-  else
-    (crontab -u root -l | grep -v "/etc/syAgent/sh-agent.sh") | crontab -u root -
+    userdel syAgent
   fi
 fi
 
@@ -101,13 +123,13 @@ printBold "|   Downloading sh-agent.sh to /etc/syAgent\n|\n|   + $(wget -nv -o /
 if [ -f /etc/syAgent/sh-agent.sh ]; then
   echo "$1" >/etc/syAgent/sa-auth.log
 
-  useradd syAgent -r -d /etc/syAgent -s /bin/false
+  if ! id -u syAgent >/dev/null 2>&1; then
+    useradd syAgent -r -d /etc/syAgent -s /bin/false
+  fi
 
   chown -R syAgent:syAgent /etc/syAgent && chmod -R 700 /etc/syAgent
 
-  chmod +s `type -p ping`
-
-  crontab -u syAgent -l 2>/dev/null | {
+  crontab -u syAgent -l 2>/dev/null | grep -v "/etc/syAgent/sh-agent.sh" | {
     cat
     echo "*/1 * * * * bash /etc/syAgent/sh-agent.sh > /etc/syAgent/sh-cron.log 2>&1"
   } | crontab -u syAgent -
@@ -116,8 +138,8 @@ if [ -f /etc/syAgent/sh-agent.sh ]; then
 	printGreen "| Success: The syAgent agent installed\n"
 	printBold "| ================================================\n"
 
-  if [ -f $0 ]; then
-    rm -f $0
+  if [ -f "$0" ]; then
+    rm -f "$0"
   fi
 else
   fail "\tError: The syAgent agent is not installed\n"
