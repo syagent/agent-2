@@ -61,6 +61,68 @@ function require_commands() {
 
 require_commands awk base64 cat date df grep head ps sed tail tr uname wc wget who
 
+function command_output() {
+  if command -v "$1" >/dev/null 2>&1; then
+    "$@" 2>/dev/null
+  fi
+}
+
+function first_proc_value() {
+  local key="$1"
+  awk -F: -v key="$key" '$1 == key { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }' /proc/cpuinfo 2>/dev/null
+}
+
+function count_proc_key() {
+  local key="$1"
+  grep -c "^$key" /proc/cpuinfo 2>/dev/null
+}
+
+function lscpu_value() {
+  local key="$1"
+  command_output lscpu | awk -F: -v key="$key" '$1 == key { gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit }'
+}
+
+function sys_cpu_value() {
+  local path="$1"
+  if [ -r "$path" ]; then
+    sed_rt "$(cat "$path")"
+  fi
+}
+
+function normalize_mhz() {
+  local value="$1"
+  value=$(sed_rt "$value")
+  value="${value/MHz/}"
+  value="${value/mhz/}"
+  value=$(sed_rt "$value")
+  if [ -z "$value" ]; then
+    echo "0"
+    return
+  fi
+  to_num "$value"
+}
+
+function clean_kv_value() {
+  local value
+  value=$(sed_rt "$1")
+  value=${value//,/ }
+  value=${value//:/-}
+  value=${value//;/ }
+  if [ -z "$value" ]; then
+    echo "N/A"
+  else
+    echo "$value"
+  fi
+}
+
+function bool_text() {
+  if [ "$1" = "true" ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+}
+
 version=$(sed_rt "$version")
 
 uptime=$(sed_rt "$(to_int "$(cat /proc/uptime | awk '{ print $1 }')")")
@@ -93,7 +155,9 @@ if [ -z "$os_name" ]; then
   fi
 fi
 
-case $(uname -m) in
+machine_arch=$(uname -m)
+
+case "$machine_arch" in
 x86_64)
   os_arch=$(sed_rt "x64")
   ;;
@@ -105,24 +169,81 @@ i*86)
   ;;
 esac
 
-cpu_name=$(sed_rt "$(cat /proc/cpuinfo | grep 'model name' | awk -F\: '{ print $2 }')")
-cpu_cores=$(sed_rt "$(($(cat /proc/cpuinfo | grep 'model name' | awk -F\: '{ print $2 }' | sed -e :a -e '$!N;s/\n/\|/;ta' | tr -cd \| | wc -c) + 1))")
+cpu_name=$(sed_rt "$(first_proc_value "model name")")
+cpu_vendor=$(sed_rt "$(first_proc_value "vendor_id")")
+cpu_hardware=$(sed_rt "$(first_proc_value "Hardware")")
+cpu_implementer=$(sed_rt "$(first_proc_value "CPU implementer")")
+cpu_part=$(sed_rt "$(first_proc_value "CPU part")")
+cpu_revision=$(sed_rt "$(first_proc_value "CPU revision")")
 
 if [ -z "$cpu_name" ]; then
-  cpu_name=$(sed_rt "$(lscpu | grep "Model name" | awk -F\: '{ print $2 }')")
-  cpu_cores=$(sed_rt "$(lscpu | grep "Core(s) per cluster" | awk -F\: '{ print $2 }')")
+  cpu_name=$(sed_rt "$(first_proc_value "Processor")")
 fi
 
 if [ -z "$cpu_name" ]; then
-  cpu_name=$(sed_rt "$(cat /proc/cpuinfo | grep 'vendor_id' | awk -F\: '{ print $2 } END { if (!NR) print "N/A" }')")
-  cpu_cores=$(sed_rt "$(($(cat /proc/cpuinfo | grep 'vendor_id' | awk -F\: '{ print $2 }' | sed -e :a -e '$!N;s/\n/\|/;ta' | tr -cd \| | wc -c) + 1))")
+  cpu_name=$(sed_rt "$(lscpu_value "Model name")")
 fi
 
-cpu_freq=$(sed_rt "$(cat /proc/cpuinfo | grep 'cpu MHz' | awk -F\: '{ print $2 }')")
+if [ -z "$cpu_name" ] && [ -n "$cpu_hardware" ]; then
+  cpu_name="$cpu_hardware"
+fi
 
+if [ -z "$cpu_name" ]; then
+  cpu_name=$(sed_rt "$machine_arch")
+fi
+
+if [ -z "$cpu_vendor" ]; then
+  cpu_vendor=$(sed_rt "$(lscpu_value "Vendor ID")")
+fi
+
+if [ -z "$cpu_vendor" ] && [ -n "$cpu_implementer" ]; then
+  cpu_vendor="$cpu_implementer"
+fi
+
+if [ -z "$cpu_vendor" ]; then
+  cpu_vendor="N/A"
+fi
+
+cpu_cores=$(sed_rt "$(count_proc_key "processor")")
+if [ "$cpu_cores" = "0" ]; then
+  cpu_cores=$(sed_rt "$(lscpu_value "CPU(s)")")
+fi
+cpu_cores=$(sed_rt "$(to_num "$cpu_cores")")
+
+cpu_sockets=$(sed_rt "$(lscpu_value "Socket(s)")")
+cpu_sockets=$(sed_rt "$(to_num "$cpu_sockets")")
+
+cpu_freq=$(sed_rt "$(first_proc_value "cpu MHz")")
 if [ -z "$cpu_freq" ]; then
-  cpu_freq=$(sed_rt "$(to_num "$(lscpu | grep 'CPU MHz' | awk -F\: '{ print $2 }' | sed -e 's/^ *//g' -e 's/ *$//g')")")
+  cpu_freq=$(sed_rt "$(lscpu_value "CPU MHz")")
 fi
+if [ -z "$cpu_freq" ]; then
+  cpu_freq=$(sys_cpu_value /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)
+  if [ -n "$cpu_freq" ]; then
+    cpu_freq=$((cpu_freq / 1000))
+  fi
+fi
+cpu_freq=$(sed_rt "$(normalize_mhz "$cpu_freq")")
+
+cpu_min_mhz=$(sed_rt "$(lscpu_value "CPU min MHz")")
+if [ -z "$cpu_min_mhz" ]; then
+  cpu_min_mhz=$(sys_cpu_value /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq)
+  if [ -n "$cpu_min_mhz" ]; then
+    cpu_min_mhz=$((cpu_min_mhz / 1000))
+  fi
+fi
+cpu_min_mhz=$(sed_rt "$(normalize_mhz "$cpu_min_mhz")")
+
+cpu_max_mhz=$(sed_rt "$(lscpu_value "CPU max MHz")")
+if [ -z "$cpu_max_mhz" ]; then
+  cpu_max_mhz=$(sys_cpu_value /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq)
+  if [ -n "$cpu_max_mhz" ]; then
+    cpu_max_mhz=$((cpu_max_mhz / 1000))
+  fi
+fi
+cpu_max_mhz=$(sed_rt "$(normalize_mhz "$cpu_max_mhz")")
+
+cpu_details="arch:$(clean_kv_value "$machine_arch"),vendor:$(clean_kv_value "$cpu_vendor"),model:$(clean_kv_value "$cpu_name"),hardware:$(clean_kv_value "$cpu_hardware"),implementer:$(clean_kv_value "$cpu_implementer"),part:$(clean_kv_value "$cpu_part"),revision:$(clean_kv_value "$cpu_revision"),threads:$(clean_kv_value "$cpu_cores"),sockets:$(clean_kv_value "$cpu_sockets"),min_mhz:$(clean_kv_value "$cpu_min_mhz"),max_mhz:$(clean_kv_value "$cpu_max_mhz")"
 
 ram_total=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^MemTotal: | awk '{ print $2 }')")")
 ram_available=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^MemAvailable: | awk '{ print $2 }')")")
@@ -168,23 +289,163 @@ get_command_version() {
   fi
 }
 
-nginx_version=$(get_command_version 3 nginx -v)
-apache_version=$(get_command_version 3 httpd -v)
-mysql_version=$(get_command_version 3 mysql --version)
-php_version=$(get_command_version 2 php -v)
-docker_version=$(get_command_version 3 docker -v)
-python_version=$(get_command_version 2 python --version)
-perl_version=$(get_command_version 4 perl --version)
-ruby_version=$(get_command_version 2 ruby --version)
-java_version=$(get_command_version 3 java --version)
-gcc_version=$(get_command_version 3 gcc --version)
-gpp_version=$(get_command_version 3 g++ --version)
-postgres_version=$(get_command_version 3 psql --version)
-mongo_version=$(get_command_version 3 mongo --version)
-redis_version=$(get_command_version 3 redis-server --version)
-kafka_version=$(get_command_version 3 kafka-server --version)
-rabbitmq_version=$(get_command_version 2 rabbitmq --version)
-nodejs_version=$(get_command_version 1 node --version)
+function add_app() {
+  local name="$1"
+  local version="$2"
+
+  version=$(clean_kv_value "$version")
+  if [ "$version" = "N/A" ]; then
+    return
+  fi
+
+  if [ -n "$apps_info" ]; then
+    apps_info="$apps_info,"
+  fi
+  apps_info="$apps_info$name:$version"
+}
+
+apps_info=""
+
+add_app "nginx_version" "$(get_command_version 3 nginx -v)"
+add_app "apache_version" "$(get_command_version 3 httpd -v)"
+add_app "mysql_version" "$(get_command_version 3 mysql --version)"
+add_app "postgres_version" "$(get_command_version 3 psql --version)"
+add_app "mongo_version" "$(get_command_version 3 mongo --version)"
+add_app "php_version" "$(get_command_version 2 php -v)"
+add_app "docker_version" "$(get_command_version 3 docker -v)"
+add_app "python_version" "$(get_command_version 2 python --version)"
+add_app "python3_version" "$(get_command_version 2 python3 --version)"
+add_app "pip_version" "$(get_command_version 2 pip --version)"
+add_app "pip3_version" "$(get_command_version 2 pip3 --version)"
+add_app "perl_version" "$(get_command_version 4 perl --version)"
+add_app "ruby_version" "$(get_command_version 2 ruby --version)"
+add_app "java_version" "$(get_command_version 2 java --version)"
+add_app "gcc_version" "$(get_command_version 3 gcc --version)"
+add_app "gpp_version" "$(get_command_version 3 g++ --version)"
+add_app "redis_version" "$(get_command_version 3 redis-server --version)"
+add_app "kafka_version" "$(get_command_version 3 kafka-server --version)"
+add_app "rabbitmq_version" "$(get_command_version 2 rabbitmq --version)"
+add_app "nodejs_version" "$(get_command_version 1 node --version)"
+add_app "npm_version" "$(get_command_version 1 npm --version)"
+add_app "yarn_version" "$(get_command_version 1 yarn --version)"
+add_app "pnpm_version" "$(get_command_version 1 pnpm --version)"
+add_app "go_version" "$(get_command_version 3 go version)"
+add_app "rustc_version" "$(get_command_version 2 rustc --version)"
+add_app "cargo_version" "$(get_command_version 2 cargo --version)"
+add_app "dotnet_version" "$(get_command_version 1 dotnet --version)"
+add_app "composer_version" "$(get_command_version 3 composer --version)"
+add_app "caddy_version" "$(get_command_version 1 caddy version)"
+add_app "traefik_version" "$(get_command_version 3 traefik version)"
+add_app "haproxy_version" "$(get_command_version 3 haproxy -v)"
+add_app "certbot_version" "$(get_command_version 2 certbot --version)"
+add_app "mariadb_version" "$(get_command_version 3 mariadb --version)"
+add_app "sqlite3_version" "$(get_command_version 1 sqlite3 --version)"
+add_app "memcached_version" "$(get_command_version 2 memcached -V)"
+add_app "elasticsearch_version" "$(get_command_version 2 elasticsearch --version)"
+add_app "opensearch_version" "$(get_command_version 2 opensearch --version)"
+add_app "git_version" "$(get_command_version 3 git --version)"
+add_app "docker_compose_version" "$(get_command_version 4 docker-compose --version)"
+add_app "podman_version" "$(get_command_version 3 podman --version)"
+add_app "containerd_version" "$(get_command_version 3 containerd --version)"
+add_app "kubectl_version" "$(get_command_version 3 kubectl version --client=true)"
+add_app "helm_version" "$(get_command_version 3 helm version --short)"
+add_app "pm2_version" "$(get_command_version 2 pm2 --version)"
+add_app "supervisord_version" "$(get_command_version 2 supervisord --version)"
+add_app "fail2ban_version" "$(get_command_version 2 fail2ban-client --version)"
+add_app "ufw_version" "$(get_command_version 2 ufw --version)"
+add_app "firewalld_version" "$(get_command_version 2 firewall-cmd --version)"
+
+function first_available_file() {
+  for path in "$@"; do
+    if [ -r "$path" ]; then
+      sed_rt "$(cat "$path")"
+      return
+    fi
+  done
+}
+
+function detect_package_manager() {
+  for package_manager in apt-get dnf yum pacman zypper apk emerge; do
+    if command -v "$package_manager" >/dev/null 2>&1; then
+      echo "$package_manager"
+      return
+    fi
+  done
+  echo "N/A"
+}
+
+function detect_cloud_vendor() {
+  local vendor="$1"
+  local product="$2"
+  local combined
+  combined=$(printf "%s %s" "$vendor" "$product" | tr '[:upper:]' '[:lower:]')
+
+  case "$combined" in
+    *amazon*|*ec2*) echo "aws" ;;
+    *google*|*gce*) echo "gcp" ;;
+    *microsoft*|*azure*) echo "azure" ;;
+    *digitalocean*) echo "digitalocean" ;;
+    *linode*) echo "linode" ;;
+    *vultr*) echo "vultr" ;;
+    *hetzner*) echo "hetzner" ;;
+    *oracle*) echo "oracle" ;;
+    *alibaba*) echo "alibaba" ;;
+    *openstack*) echo "openstack" ;;
+    *) echo "N/A" ;;
+  esac
+}
+
+hostname_value=$(sed_rt "$(command_output hostname)")
+if [ -z "$hostname_value" ]; then
+  hostname_value=$(sed_rt "$(uname -n)")
+fi
+
+timezone_value=$(sed_rt "$(command_output timedatectl show -p Timezone --value)")
+if [ -z "$timezone_value" ]; then
+  timezone_value=$(first_available_file /etc/timezone)
+fi
+if [ -z "$timezone_value" ]; then
+  timezone_value=$(date +%Z)
+fi
+
+virtualization_value=$(sed_rt "$(command_output systemd-detect-virt --vm)")
+if [ -z "$virtualization_value" ]; then
+  virtualization_value="N/A"
+fi
+
+container_value=$(sed_rt "$(command_output systemd-detect-virt --container)")
+if [ -z "$container_value" ]; then
+  if [ -f /.dockerenv ]; then
+    container_value="docker"
+  elif [ -f /run/.containerenv ]; then
+    container_value="podman"
+  else
+    container_value="N/A"
+  fi
+fi
+
+dmi_vendor=$(first_available_file /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/board_vendor)
+dmi_product=$(first_available_file /sys/class/dmi/id/product_name)
+cloud_vendor=$(detect_cloud_vendor "$dmi_vendor" "$dmi_product")
+
+machine_id_present=false
+if [ -s /etc/machine-id ] || [ -s /var/lib/dbus/machine-id ]; then
+  machine_id_present=true
+fi
+
+boot_mode="bios"
+if [ -d /sys/firmware/efi ]; then
+  boot_mode="uefi"
+fi
+
+package_manager=$(detect_package_manager)
+
+reboot_required=false
+if [ -f /var/run/reboot-required ] || [ -f /run/reboot-required ] || [ -f /var/run/needs-restarting ]; then
+  reboot_required=true
+fi
+
+host_details="hostname:$(clean_kv_value "$hostname_value"),timezone:$(clean_kv_value "$timezone_value"),virtualization:$(clean_kv_value "$virtualization_value"),container:$(clean_kv_value "$container_value"),cloud_vendor:$(clean_kv_value "$cloud_vendor"),machine_id_present:$(bool_text "$machine_id_present"),boot_mode:$(clean_kv_value "$boot_mode"),package_manager:$(clean_kv_value "$package_manager"),reboot_required:$(bool_text "$reboot_required")"
 
 
 success_attempts=""
@@ -320,9 +581,9 @@ else
   gpu_procs_info="nvidia-smi not available"
 fi
 
-multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "nginx_version:$nginx_version,apache_version:$apache_version,mysql_version:$mysql_version,postgres_version:$postgres_version,mongo_version:$mongo_version,php_version:$php_version,docker_version:$docker_version,python_version:$python_version,perl_version:$perl_version,ruby_version:$ruby_version,java_version:$java_version,gcc_version:$gcc_version,gpp_version:$gpp_version,redis_version:$redis_version,kafka_version:$kafka_version,rabbitmq_version:$rabbitmq_version,nodejs_version:$nodejs_version") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info")"
+multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details")"
 
-if [ "$dry_run" = true ]; thenc
+if [ "$dry_run" = true ]; then
   printf "%s\n" "$multipart_data"
   exit 0
 fi
