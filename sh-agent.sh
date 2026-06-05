@@ -268,6 +268,162 @@ disk_usage=$(sed_rt "$(to_num "$(($(df -P -B 1 | grep '^/' | awk '{ print $3 }' 
 
 disk_array=$(sed_rt "$(df -P -B 1 | grep '^/' | awk '{ print $1" "$2" "$3";" }' | sed -e :a -e '$!N;s/\n/ /;ta' | awk '{ print $0 } END { if (!NR) print "N/A" }')")
 
+function disk_base_name() {
+  local device="$1"
+
+  if [ -d "/sys/block/$device" ]; then
+    echo "$device"
+    return
+  fi
+
+  while [ -n "$device" ]; do
+    device="${device%[0-9]}"
+    device="${device%p}"
+    if [ -d "/sys/block/$device" ]; then
+      echo "$device"
+      return
+    fi
+    break
+  done
+}
+
+function disk_sector_size() {
+  local base="$1"
+
+  if [ -r "/sys/block/$base/queue/logical_block_size" ]; then
+    cat "/sys/block/$base/queue/logical_block_size"
+  else
+    echo 512
+  fi
+}
+
+function should_skip_disk_device() {
+  case "$1" in
+    loop*|ram*|fd*|sr*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+function collect_disk_snapshot() {
+  awk '{ print $3" "$4" "$6" "$8" "$10" "$12" "$13 }' /proc/diskstats 2>/dev/null
+}
+
+function previous_disk_line() {
+  local device="$1"
+  if [ -r /etc/syAgent/disk-data.log ]; then
+    awk -v device="$device" '$1 == device { print; exit }' /etc/syAgent/disk-data.log
+  fi
+}
+
+function collect_disk_io() {
+  local now="$1"
+  local disk_io=""
+  local snapshot=""
+
+  snapshot="$(collect_disk_snapshot)"
+
+  while read -r device reads sectors_read writes sectors_written io_time weighted_io_time; do
+    if [ -z "$device" ] || should_skip_disk_device "$device"; then
+      continue
+    fi
+
+    local base sector_size total_read_bytes total_write_bytes
+    base=$(disk_base_name "$device")
+    if [ -z "$base" ]; then
+      continue
+    fi
+
+    sector_size=$(disk_sector_size "$base")
+    total_read_bytes=$((sectors_read * sector_size))
+    total_write_bytes=$((sectors_written * sector_size))
+
+    local read_bps=0 write_bps=0 read_iops=0 write_iops=0 busy_percent=0
+    local previous previous_time previous_reads previous_sectors_read previous_writes previous_sectors_written previous_io_time
+    previous="$(previous_disk_line "$device")"
+    if [ -n "$previous" ]; then
+      read -r _ previous_time previous_reads previous_sectors_read previous_writes previous_sectors_written previous_io_time _ <<< "$previous"
+      local interval=$((now - previous_time))
+      if [ "$interval" -gt 0 ]; then
+        local read_delta=$((reads - previous_reads))
+        local write_delta=$((writes - previous_writes))
+        local sectors_read_delta=$((sectors_read - previous_sectors_read))
+        local sectors_written_delta=$((sectors_written - previous_sectors_written))
+        local io_time_delta=$((io_time - previous_io_time))
+
+        if [ "$read_delta" -gt 0 ]; then
+          read_iops=$((read_delta / interval))
+        fi
+        if [ "$write_delta" -gt 0 ]; then
+          write_iops=$((write_delta / interval))
+        fi
+        if [ "$sectors_read_delta" -gt 0 ]; then
+          read_bps=$((sectors_read_delta * sector_size / interval))
+        fi
+        if [ "$sectors_written_delta" -gt 0 ]; then
+          write_bps=$((sectors_written_delta * sector_size / interval))
+        fi
+        if [ "$io_time_delta" -gt 0 ]; then
+          busy_percent=$((io_time_delta / (interval * 10)))
+          if [ "$busy_percent" -gt 100 ]; then
+            busy_percent=100
+          fi
+        fi
+      fi
+    fi
+
+    disk_io="$disk_io""name:$(clean_kv_value "$device"),read_bytes_per_sec:$read_bps,write_bytes_per_sec:$write_bps,read_iops:$read_iops,write_iops:$write_iops,busy_percent:$busy_percent,total_read_bytes:$total_read_bytes,total_write_bytes:$total_write_bytes;"
+  done <<< "$snapshot"
+
+  printf "%s\n" "$snapshot" | awk -v now="$now" '{ print $1" "now" "$2" "$3" "$4" "$5" "$6" "$7 }' >/etc/syAgent/disk-data.log
+  echo "$disk_io"
+}
+
+function collect_raid_details() {
+  local raid_details=""
+
+  if [ -r /proc/mdstat ]; then
+    while read -r line; do
+      case "$line" in
+        md*:*active*)
+          local name level status active_devices total_devices failed_devices spare_devices
+          name=$(echo "$line" | awk -F: '{ print $1 }' | sed -e 's/^ *//g' -e 's/ *$//g')
+          level=$(echo "$line" | awk '{ for (i=1; i<=NF; i++) if ($i ~ /^raid/) { print $i; exit } }')
+          active_devices=$(echo "$line" | grep -o '\[[0-9]\+\]' | tail -n 1 | tr -d '[]')
+          total_devices=$(echo "$line" | grep -o '\[[0-9]\+/[0-9]\+\]' | tail -n 1 | awk -F'[][]|/' '{ print $2 }')
+          failed_devices=0
+          spare_devices=$(echo "$line" | grep -o '(S)' | wc -l)
+          status="active"
+
+          if echo "$line" | grep -q "_"; then
+            status="degraded"
+          fi
+          if [ -z "$active_devices" ]; then
+            active_devices=0
+          fi
+          if [ -z "$total_devices" ]; then
+            total_devices="$active_devices"
+          fi
+
+          raid_details="$raid_details""name:$(clean_kv_value "$name"),type:md,level:$(clean_kv_value "$level"),status:$(clean_kv_value "$status"),active_devices:$(to_num "$active_devices"),total_devices:$(to_num "$total_devices"),failed_devices:$failed_devices,spare_devices:$(to_num "$spare_devices");"
+          ;;
+      esac
+    done < /proc/mdstat
+  fi
+
+  if [ -n "$(command -v lsblk)" ]; then
+    while read -r name type; do
+      if [ "$type" = "lvm" ] || [ "$type" = "crypt" ] || [ "$type" = "dmraid" ]; then
+        raid_details="$raid_details""name:$(clean_kv_value "$name"),type:$(clean_kv_value "$type"),level:N/A,status:active,active_devices:0,total_devices:0,failed_devices:0,spare_devices:0;"
+      fi
+    done <<< "$(lsblk -rno NAME,TYPE 2>/dev/null)"
+  fi
+
+  echo "$raid_details"
+}
+
+disk_io=$(collect_disk_io "$(date +%s)")
+raid_details=$(collect_raid_details)
+
 
 
 
@@ -581,7 +737,7 @@ else
   gpu_procs_info="nvidia-smi not available"
 fi
 
-multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details")"
+multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details") $(to_base64 "$disk_io") $(to_base64 "$raid_details")"
 
 if [ "$dry_run" = true ]; then
   printf "%s\n" "$multipart_data"
