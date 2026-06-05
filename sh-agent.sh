@@ -305,7 +305,8 @@ function should_skip_disk_device() {
 }
 
 function collect_disk_snapshot() {
-  awk '{ print $3" "$4" "$6" "$8" "$10" "$12" "$13 }' /proc/diskstats 2>/dev/null
+  # /proc/diskstats: 3=name, 4=reads completed, 6=sectors read, 8=writes completed, 10=sectors written, 13=io_time(ms), 14=weighted_io_time(ms)
+  awk '{ print $3" "$4" "$6" "$8" "$10" "$13" "$14 }' /proc/diskstats 2>/dev/null
 }
 
 function previous_disk_line() {
