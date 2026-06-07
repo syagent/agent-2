@@ -1,187 +1,245 @@
-# SyAgent - System Monitoring Agent
+# SyAgent System Monitoring Agent
 
-SyAgent is a lightweight, comprehensive system monitoring agent written in Bash that collects detailed system metrics and securely transmits them to the SyAgent monitoring service. It provides real-time visibility into your server's performance, resource usage, and system health.
+SyAgent is a Bash-based Linux monitoring agent. It runs as a dedicated
+unprivileged user, collects host telemetry once per minute, and sends it to the
+SyAgent collector over HTTPS.
 
-## Features
+## Security Model
 
-- **Comprehensive Monitoring**: Tracks CPU, memory, disk, network, GPU, and process metrics
-- **Lightweight**: Pure Bash implementation with minimal system overhead
-- **Secure**: Token-based authentication for data transmission
-- **Easy Installation**: One-command setup with automatic dependency management
-- **Cross-Platform**: Supports major Linux distributions (Ubuntu, CentOS, Arch, etc.)
-- **Real-time**: Collects and reports metrics every minute via cron
+- Releases are installed by an explicit version, never from the mutable `main`
+  branch.
+- Every release requires a detached GPG signature from the pinned SyAgent
+  release key before checksums or artifacts are trusted.
+- TLS certificate verification is mandatory for downloads and telemetry.
+- The agent runs as `syAgent`; it does not run as root.
+- Executables and configuration are owned by root and cannot be modified by
+  the runtime user.
+- The authentication token is readable only by root and the agent's primary
+  group.
+- Mutable state and response logs are isolated under `/var/lib/syAgent` and
+  `/var/log/syAgent`.
+- systemd hosts use a sandboxed oneshot service and timer. Other hosts use a
+  dedicated-user cron entry.
+- Updates are never installed automatically.
 
-## Quick Start
+See [SECURITY.md](SECURITY.md) for the threat model, verification details, and
+vulnerability reporting guidance.
 
-### Installation
+## Quick Installation
 
-1. **Get your authentication token** from the SyAgent dashboard
-2. **Run the installer** as root:
+Download the pinned GitHub release installer and run it with the server ID from
+the SyAgent dashboard:
 
-```bash
-curl -sSL https://raw.githubusercontent.com/syagent/agent-2/main/install.sh | bash -s 'YOUR_TOKEN_HERE'
+```zsh
+wget -q https://github.com/syagent/agent-2/releases/download/v1.2.0/install.sh && sudo bash install.sh --version 1.2.0 SERVER_ID
 ```
 
-Alternatively, download and run manually:
+This command trusts GitHub and HTTPS for the initial public installer. The
+installer then requires the pinned SyAgent GPG signature and verified checksums
+for every remaining release artifact. Use the manual process below to
+authenticate the initial installer independently.
 
-```bash
-wget https://raw.githubusercontent.com/syagent/agent-2/main/install.sh
+## Verified Installation
+
+The SyAgent release-signing fingerprint is:
+
+```text
+8174 2456 29A3 C612 E879 7E03 04E9 5275 7DA5 F0B2
+```
+
+Confirm this fingerprint through the SyAgent dashboard or the SyAgent website's
+security page before trusting the copy published on GitHub.
+
+Choose a published release version and authenticate the installer before
+executing it:
+
+```zsh
+VERSION="1.2.0"
+BASE_URL="https://github.com/syagent/agent-2/releases/download/v${VERSION}"
+GNUPGHOME="$(mktemp -d)"
+chmod 700 "$GNUPGHOME"
+export GNUPGHOME
+
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output install.sh "${BASE_URL}/install.sh"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output SHA256SUMS "${BASE_URL}/SHA256SUMS"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output SHA256SUMS.asc "${BASE_URL}/SHA256SUMS.asc"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output release-signing-key.asc "${BASE_URL}/release-signing-key.asc"
+
+gpg --batch --import release-signing-key.asc
+gpg --batch --fingerprint releases@syagent.com
+gpg --batch --verify SHA256SUMS.asc SHA256SUMS
+grep ' install.sh$' SHA256SUMS | sha256sum --check --strict -
 chmod +x install.sh
-sudo ./install.sh 'YOUR_TOKEN_HERE'
+sudo ./install.sh --version "$VERSION"
+
+rm -rf "$GNUPGHOME"
+unset GNUPGHOME
 ```
 
-### What the installer does:
+The fingerprint printed by GPG must exactly match the value above and the
+separately published SyAgent fingerprint. On systems without `sha256sum`, use:
 
-- Downloads the monitoring agent to `/etc/syAgent/`
-- Creates a dedicated `syAgent` user for security
-- Sets up a cron job to run every minute
-- Installs cron if not already present
-- Configures proper permissions and security settings
+```zsh
+grep ' install.sh$' SHA256SUMS | shasum --algorithm 256 --check -
+```
 
-## Requirements
+The installer prompts for the token without echoing it. Automation can provide
+the token through a protected file or standard input:
 
-- **Operating System**: Linux (any modern distribution)
-- **Permissions**: Root access for installation (agent runs as dedicated user)
-- **Dependencies**: 
-  - `bash` (installed by default on most systems)
-  - `cron` (auto-installed if missing)
-  - `wget` or `curl` (for installation and data transmission)
-  - Standard system utilities (`ps`, `df`, `who`, etc.)
+```zsh
+sudo ./install.sh --version "$VERSION" --token-file /root/syagent-token
+```
 
-## Monitored Metrics
+```zsh
+printf '%s\n' "$SYAGENT_TOKEN" |
+  sudo ./install.sh --version "$VERSION" --token-stdin
+```
 
-### System
-- System uptime
-- System load average
-- IO load and wait times
+A positional token remains supported for compatibility, but it can be recorded
+in shell history and should be avoided. During installation, signature
+verification is automatic and cannot be disabled.
 
-### Operating System
-- OS kernel version
-- OS name and distribution
-- System architecture (x64, x86, ARM, etc.)
+## Installation Layout
 
-### CPU
-- CPU identifier and model
-- Number of CPU cores
-- CPU frequency
-- Real-time CPU load percentage
+| Path | Ownership/mode | Purpose |
+| --- | --- | --- |
+| `/etc/syAgent/sh-agent.sh` | `root:root`, `0755` | Agent executable |
+| `/etc/syAgent/uninstall.sh` | `root:root`, `0755` | Scoped uninstaller |
+| `/etc/syAgent/sa-auth.log` | `root:<agent-group>`, `0640` | Authentication token |
+| `/etc/syAgent/VERSION` | `root:root`, `0644` | Installed release |
+| `/var/lib/syAgent` | `syAgent:<agent-group>`, `0750` | Mutable counter state |
+| `/var/log/syAgent` | `syAgent:<agent-group>`, `0750` | Collector response/cron logs |
+| `/etc/systemd/system/syagent.*` | `root:root`, `0644` | systemd runtime units |
 
-### Memory
-- RAM total capacity
-- RAM usage (used/free)
-- SWAP total capacity  
-- SWAP usage statistics
+## Collected Telemetry
 
-### Storage
-- Disk list and mount points
-- Total disk capacity
-- Disk usage per partition
-- Available free space
+The following data is collected on every run when available. These defaults are
+unchanged from the existing agent payload.
+
+### Host and Operating System
+
+- Agent version, uptime, kernel, distribution, architecture, hostname, and
+  timezone
+- CPU model, vendor, architecture, core/thread count, socket count, current,
+  minimum, and maximum frequency
+- Virtualization/container type, detected cloud vendor, package manager, boot
+  mode, reboot-required state, and whether a machine ID exists
+- Active login-session count, process count, open file handles, and file-handle
+  limit
+
+### Memory and CPU
+
+- Total/used RAM and total/used swap
+- Available, free, buffered, cached, active, inactive, anonymous, slab,
+  reclaimable, shared, dirty, writeback, page-table, kernel-stack, commit-limit,
+  and committed memory
+- Memory PSI averages, page faults, major faults, swap activity, page scans,
+  page reclamation, and OOM-kill deltas
+- Load averages, CPU utilization, and I/O-wait utilization
+
+### Storage and RAID
+
+- Mounted device names, capacity, and usage
+- Per-device read/write throughput, IOPS, busy percentage, and cumulative bytes
+- Linux software RAID, LVM, encrypted-device, and device-mapper RAID summaries
 
 ### Network
-- Active connection count
-- Network interface identifiers
-- IPv4 and IPv6 addresses
-- RX/TX bytes since boot
-- Current RX/TX transfer rates
 
-### Processes
-- Total process count
-- Process list with CPU/memory usage
-- Top processes by resource consumption
+- Selected network-interface name
+- Host IPv4 and IPv6 addresses
+- Active TCP/UDP connection count
+- Received/transmitted byte counters and interval deltas
 
-### File System
-- Open file handle count
-- System file handle limits
+### Processes, Applications, and GPU
 
-### GPU (NVIDIA)
-- GPU identifier and model
-- GPU memory total/usage
-- GPU utilization percentage
-- GPU temperature
-- Running GPU processes
+- Up to 15 top processes, including operating-system username, CPU usage, RSS,
+  and command name
+- Installed versions of detected web servers, databases, language runtimes,
+  compilers, package managers, container tools, orchestration tools, proxies,
+  certificate tools, process managers, and firewall/security tools
+- NVIDIA GPU model, utilization, memory usage, and temperature
+- NVIDIA compute-process GPU UUID, PID, operating-system username, process
+  name, and used memory
 
-### Applications
-- Installed application versions
-- Running services and daemons
-- Database versions (MySQL, PostgreSQL, MongoDB, Redis)
-- Web server versions (Apache, Nginx)
-- Programming language versions (Python, Node.js, Java, etc.)
+### SSH
 
-### SSH & Security
-- SSH connection attempts (successful/failed)
-- Login session count
-- Security event monitoring
+- Aggregate counts of accepted and failed password/public-key events readable
+  from `/var/log/auth.log` or `/var/log/secure`
+- These counters are zero when the unprivileged account or systemd sandbox
+  cannot read the host authentication logs
+- Log message bodies, passwords, and key material are not transmitted
 
-### Miscellaneous
-- Agent version
-- Active user sessions
-- System configuration details
+The token and payload are form encoded for the existing collector API. Base64
+inside the payload is encoding, not encryption; confidentiality is provided by
+verified HTTPS.
 
-## Configuration
+## Operations
 
-The agent stores its configuration in `/etc/syAgent/`:
+Check the local installation and required commands:
 
-- `sa-auth.log`: Contains your authentication token
-- `sh-agent.sh`: The main monitoring script
-- `sh-cron.log`: Execution logs from cron
-- `sh-agent.log`: Data transmission logs
+```zsh
+sudo -u syAgent /etc/syAgent/sh-agent.sh --check
+```
 
-## Troubleshooting
+Print the current payload without sending it or exposing the token:
 
-### Check if the agent is running:
-```bash
+```zsh
+sudo -u syAgent /etc/syAgent/sh-agent.sh --print-telemetry
+```
+
+The output intentionally contains collected host telemetry but replaces the
+credential with `token=[REDACTED]`.
+
+Check systemd status and logs:
+
+```zsh
+sudo systemctl status syagent.timer syagent.service
+sudo journalctl --unit syagent.service
+```
+
+On cron fallback installations:
+
+```zsh
 sudo crontab -u syAgent -l
+sudo tail /var/log/syAgent/cron.log
 ```
 
-### View recent logs:
-```bash
-sudo tail -f /etc/syAgent/sh-cron.log
-```
-
-### Manual test run:
-```bash
-sudo -u syAgent bash /etc/syAgent/sh-agent.sh
-```
-
-### Reinstall the agent:
-```bash
-# The installer automatically removes old installations
-sudo ./install.sh 'YOUR_TOKEN_HERE'
-```
+Install a newer release by downloading and verifying its installer, then run it
+with the new explicit version. Existing releases never update themselves.
 
 ## Uninstallation
 
-To remove SyAgent completely:
-
-```bash
-# Remove cron job
-sudo crontab -u syAgent -r 2>/dev/null
-# Remove user
-sudo userdel syAgent 2>/dev/null
-# Remove files
-sudo rm -rf /etc/syAgent
+```zsh
+sudo /etc/syAgent/uninstall.sh
 ```
 
-## Security
+The uninstaller removes only the SyAgent service/timer, SyAgent cron entry,
+installed files, runtime state/logs, and dedicated user.
 
-- Agent runs as a dedicated non-privileged user (`syAgent`)
-- Secure token-based authentication
-- HTTPS encryption for all data transmission
-- No sensitive data stored locally except authentication token
-- Minimal system permissions required for operation
+## Requirements
 
-## Contributing
+- Linux
+- Root privileges for installation and uninstallation
+- Bash and standard Linux utilities
+- `curl` or `wget` for installation; `wget` for the installed agent
+- GnuPG
+- `sha256sum` or `shasum`
+- systemd, or cron as a fallback
 
-We welcome contributions! Please feel free to submit issues, feature requests, or pull requests.
+## Release Packaging
 
-## Support
+Maintainers must provide the dedicated release-signing private key through
+their protected GPG home. Unsigned releases are refused:
 
-- **Issues**: Report bugs or request features via GitHub issues
-- **Documentation**: Visit the SyAgent dashboard for detailed setup guides
-- **Community**: Join our community forums for tips and support
+```zsh
+GNUPGHOME="/secure/release-gnupg" \
+GPG_KEY_ID="8174245629A3C612E8797E0304E952757DA5F0B2" \
+  ./scripts/build-release.sh 1.2.0
+```
 
----
-
-**Version**: 1.0.9  
-**Compatibility**: Linux (Ubuntu, CentOS, Debian, Arch, RHEL, and more)
+The build fails unless the private key, committed public key, and pinned
+fingerprint all match.

@@ -1,0 +1,31 @@
+[Unit]
+Description=SyAgent system monitoring collection
+Documentation=https://github.com/syagent/agent-2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=syAgent
+ExecStart=/bin/bash /etc/syAgent/sh-agent.sh
+UMask=0027
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/syAgent /var/log/syAgent
+
+[Install]
+WantedBy=multi-user.target

@@ -1,20 +1,45 @@
 #!/bin/bash
-# @version		1.1.0
+# @version		1.2.0
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export DOCKER_HOST=unix:///var/run/docker.sock
 
-version="1.1.0"
+version="1.2.0"
 dry_run=false
+check_only=false
 
-if [ "$1" = "--dry-run" ] || [ "$1" = "--debug" ]; then
-  dry_run=true
-fi
+config_dir="${SYAGENT_CONFIG_DIR:-/etc/syAgent}"
+state_dir="${SYAGENT_STATE_DIR:-/var/lib/syAgent}"
+log_dir="${SYAGENT_LOG_DIR:-/var/log/syAgent}"
+auth_file="$config_dir/sa-auth.log"
+response_log="$log_dir/sh-agent.log"
 
-if [ -f /etc/syAgent/sa-auth.log ]; then
-  read -r token < /etc/syAgent/sa-auth.log
+case "${1:-}" in
+  --dry-run | --debug | --print-telemetry)
+    dry_run=true
+    ;;
+  --check)
+    check_only=true
+    ;;
+  --version)
+    printf '%s\n' "$version"
+    exit 0
+    ;;
+  -h | --help)
+    printf '%s\n' "Usage: sh-agent.sh [--check|--dry-run|--print-telemetry|--version]"
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    printf 'Error: Unknown option: %s\n' "$1" >&2
+    exit 1
+    ;;
+esac
+
+if [ -f "$auth_file" ]; then
+  read -r token < "$auth_file"
 else
   echo "Error: Auth file required"
   exit 1
@@ -60,6 +85,23 @@ function require_commands() {
 }
 
 require_commands awk base64 cat date df grep head ps sed tail tr uname wc wget who
+
+if [ "$check_only" = true ]; then
+  [ -r "$auth_file" ] || {
+    echo "Error: Auth file is not readable"
+    exit 1
+  }
+  [ -d "$state_dir" ] && [ -w "$state_dir" ] || {
+    echo "Error: State directory is not writable: $state_dir"
+    exit 1
+  }
+  [ -d "$log_dir" ] && [ -w "$log_dir" ] || {
+    echo "Error: Log directory is not writable: $log_dir"
+    exit 1
+  }
+  echo "SyAgent check passed"
+  exit 0
+fi
 
 function command_output() {
   if command -v "$1" >/dev/null 2>&1; then
@@ -131,8 +173,19 @@ sessions=$(sed_rt "$(who | wc -l)")
 
 processes=$(sed_rt "$(ps axc | wc -l)")
 
-processes_list="$(ps axc -o uname:12,pcpu,rss,cmd --sort=-pcpu,-rss --noheaders --width 120)"
-processes_list="$(echo "$processes_list" | grep -v " ps$" | sed 's/ \+ / /g' | sed '/^$/d' | tr "\n" ";")"
+function collect_processes_list() {
+  {
+    ps axc -o pid=,uname:12=,pcpu=,rss=,comm= --sort=-pcpu,-rss --noheaders --width 120 | head -n 8
+    ps axc -o pid=,uname:12=,pcpu=,rss=,comm= --sort=-rss,-pcpu --noheaders --width 120 | head -n 8
+  } | awk '
+    $1 ~ /^[0-9]+$/ && $5 != "ps" && !seen[$1]++ && count < 15 {
+      print $2" "$3" "$4" "$5";"
+      count++
+    }
+  ' | tr -d '\n'
+}
+
+processes_list="$(collect_processes_list)"
 
 file_handles=$(sed_rt "$(to_num "$(cat /proc/sys/fs/file-nr | awk '{ print $1 }')")")
 file_handles_limit=$(sed_rt "$(to_num "$(cat /proc/sys/fs/file-nr | awk '{ print $3 }')")")
@@ -245,23 +298,143 @@ cpu_max_mhz=$(sed_rt "$(normalize_mhz "$cpu_max_mhz")")
 
 cpu_details="arch:$(clean_kv_value "$machine_arch"),vendor:$(clean_kv_value "$cpu_vendor"),model:$(clean_kv_value "$cpu_name"),hardware:$(clean_kv_value "$cpu_hardware"),implementer:$(clean_kv_value "$cpu_implementer"),part:$(clean_kv_value "$cpu_part"),revision:$(clean_kv_value "$cpu_revision"),threads:$(clean_kv_value "$cpu_cores"),sockets:$(clean_kv_value "$cpu_sockets"),min_mhz:$(clean_kv_value "$cpu_min_mhz"),max_mhz:$(clean_kv_value "$cpu_max_mhz")"
 
-ram_total=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^MemTotal: | awk '{ print $2 }')")")
-ram_available=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^MemAvailable: | awk '{ print $2 }')")")
+meminfo="$(cat /proc/meminfo 2>/dev/null)"
+
+function meminfo_kb() {
+  local key="$1"
+  printf "%s\n" "$meminfo" | awk -F: -v key="$key" '$1 == key { gsub(/^[ \t]+/, "", $2); print $2 + 0; exit }'
+}
+
+function meminfo_bytes() {
+  local value
+  value=$(to_num "$(meminfo_kb "$1")")
+  echo $((value * 1024))
+}
+
+ram_total=$(sed_rt "$(to_num "$(meminfo_kb "MemTotal")")")
+ram_available=$(sed_rt "$(to_num "$(meminfo_kb "MemAvailable")")")
 
 if [ "$ram_available" = "0" ]; then
-  ram_free=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^MemFree: | awk '{ print $2 }')")")
-  ram_cached=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^Cached: | awk '{ print $2 }')")")
-  ram_buffers=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^Buffers: | awk '{ print $2 }')")")
+  ram_free=$(sed_rt "$(to_num "$(meminfo_kb "MemFree")")")
+  ram_cached=$(sed_rt "$(to_num "$(meminfo_kb "Cached")")")
+  ram_buffers=$(sed_rt "$(to_num "$(meminfo_kb "Buffers")")")
   ram_available=$((ram_free + ram_cached + ram_buffers))
 fi
 
 ram_usage=$(((ram_total - ram_available) * 1024))
 ram_total=$((ram_total * 1024))
 
-swap_total=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^SwapTotal: | awk '{ print $2 }')")")
-swap_free=$(sed_rt "$(to_num "$(cat /proc/meminfo | grep ^SwapFree: | awk '{ print $2 }')")")
+swap_total=$(sed_rt "$(to_num "$(meminfo_kb "SwapTotal")")")
+swap_free=$(sed_rt "$(to_num "$(meminfo_kb "SwapFree")")")
 swap_usage=$(((swap_total - swap_free) * 1024))
 swap_total=$((swap_total * 1024))
+
+function psi_value() {
+  local scope="$1"
+  local field="$2"
+  awk -v scope="$scope" -v field="$field" '
+    $1 == scope {
+      for (i = 2; i <= NF; i++) {
+        split($i, pair, "=")
+        if (pair[1] == field) {
+          print pair[2]
+          exit
+        }
+      }
+    }
+  ' /proc/pressure/memory 2>/dev/null
+}
+
+function vmstat_value() {
+  local key="$1"
+  awk -v key="$key" '$1 == key { print $2 + 0; exit }' /proc/vmstat 2>/dev/null
+}
+
+function vmstat_sum() {
+  local total=0
+  local key value
+  for key in "$@"; do
+    value=$(to_num "$(vmstat_value "$key")")
+    total=$((total + value))
+  done
+  echo "$total"
+}
+
+function counter_rate() {
+  local current="$1"
+  local previous="$2"
+  local interval="$3"
+  if [ "$interval" -le 0 ] || [ "$current" -lt "$previous" ]; then
+    echo "0"
+    return
+  fi
+  awk -v current="$current" -v previous="$previous" -v interval="$interval" \
+    'BEGIN { printf "%.3f", (current - previous) / interval }'
+}
+
+function collect_memory_details() {
+  local now interval=0
+  local pgfault pgmajfault pswpin pswpout pgscan pgsteal oom_kill
+  local page_faults_per_sec=0 major_page_faults_per_sec=0
+  local swap_in_pages_per_sec=0 swap_out_pages_per_sec=0
+  local page_scans_per_sec=0 page_reclaims_per_sec=0 oom_kills_delta=0
+  local vmstat_available=false
+  local psi_available=false
+  local psi_some_avg10=0 psi_some_avg60=0 psi_some_avg300=0
+  local psi_full_avg10=0 psi_full_avg60=0 psi_full_avg300=0
+
+  now=$(date +%s)
+  if [ -r /proc/vmstat ]; then
+    vmstat_available=true
+  fi
+
+  pgfault=$(to_num "$(vmstat_value "pgfault")")
+  pgmajfault=$(to_num "$(vmstat_value "pgmajfault")")
+  pswpin=$(to_num "$(vmstat_value "pswpin")")
+  pswpout=$(to_num "$(vmstat_value "pswpout")")
+  pgscan=$(vmstat_sum "pgscan_kswapd" "pgscan_direct" "pgscan_khugepaged")
+  pgsteal=$(vmstat_sum "pgsteal_kswapd" "pgsteal_direct" "pgsteal_khugepaged")
+  oom_kill=$(to_num "$(vmstat_value "oom_kill")")
+
+  if [ -r "$state_dir/memory-data.log" ]; then
+    local previous_time previous_pgfault previous_pgmajfault previous_pswpin previous_pswpout
+    local previous_pgscan previous_pgsteal previous_oom_kill
+    read -r previous_time previous_pgfault previous_pgmajfault previous_pswpin previous_pswpout \
+      previous_pgscan previous_pgsteal previous_oom_kill < "$state_dir/memory-data.log"
+    previous_time=$(to_num "$previous_time")
+    interval=$((now - previous_time))
+
+    if [ "$interval" -gt 0 ]; then
+      page_faults_per_sec=$(counter_rate "$pgfault" "$(to_num "$previous_pgfault")" "$interval")
+      major_page_faults_per_sec=$(counter_rate "$pgmajfault" "$(to_num "$previous_pgmajfault")" "$interval")
+      swap_in_pages_per_sec=$(counter_rate "$pswpin" "$(to_num "$previous_pswpin")" "$interval")
+      swap_out_pages_per_sec=$(counter_rate "$pswpout" "$(to_num "$previous_pswpout")" "$interval")
+      page_scans_per_sec=$(counter_rate "$pgscan" "$(to_num "$previous_pgscan")" "$interval")
+      page_reclaims_per_sec=$(counter_rate "$pgsteal" "$(to_num "$previous_pgsteal")" "$interval")
+      if [ "$oom_kill" -ge "$(to_num "$previous_oom_kill")" ]; then
+        oom_kills_delta=$((oom_kill - previous_oom_kill))
+      fi
+    fi
+  fi
+
+  if [ "$dry_run" = false ]; then
+    echo "$now $pgfault $pgmajfault $pswpin $pswpout $pgscan $pgsteal $oom_kill" >"$state_dir/memory-data.log"
+  fi
+
+  if [ -r /proc/pressure/memory ]; then
+    psi_available=true
+    psi_some_avg10=$(to_num "$(psi_value "some" "avg10")")
+    psi_some_avg60=$(to_num "$(psi_value "some" "avg60")")
+    psi_some_avg300=$(to_num "$(psi_value "some" "avg300")")
+    psi_full_avg10=$(to_num "$(psi_value "full" "avg10")")
+    psi_full_avg60=$(to_num "$(psi_value "full" "avg60")")
+    psi_full_avg300=$(to_num "$(psi_value "full" "avg300")")
+  fi
+
+  echo "available_bytes:$((ram_available * 1024)),free_bytes:$(meminfo_bytes "MemFree"),buffers_bytes:$(meminfo_bytes "Buffers"),cached_bytes:$(meminfo_bytes "Cached"),active_bytes:$(meminfo_bytes "Active"),inactive_bytes:$(meminfo_bytes "Inactive"),anonymous_bytes:$(meminfo_bytes "AnonPages"),slab_bytes:$(meminfo_bytes "Slab"),reclaimable_bytes:$(meminfo_bytes "SReclaimable"),shared_bytes:$(meminfo_bytes "Shmem"),dirty_bytes:$(meminfo_bytes "Dirty"),writeback_bytes:$(meminfo_bytes "Writeback"),page_tables_bytes:$(meminfo_bytes "PageTables"),kernel_stack_bytes:$(meminfo_bytes "KernelStack"),commit_limit_bytes:$(meminfo_bytes "CommitLimit"),committed_bytes:$(meminfo_bytes "Committed_AS"),vmstat_available:$vmstat_available,psi_available:$psi_available,psi_some_avg10:$psi_some_avg10,psi_some_avg60:$psi_some_avg60,psi_some_avg300:$psi_some_avg300,psi_full_avg10:$psi_full_avg10,psi_full_avg60:$psi_full_avg60,psi_full_avg300:$psi_full_avg300,page_faults_per_sec:$page_faults_per_sec,major_page_faults_per_sec:$major_page_faults_per_sec,swap_in_pages_per_sec:$swap_in_pages_per_sec,swap_out_pages_per_sec:$swap_out_pages_per_sec,page_scans_per_sec:$page_scans_per_sec,page_reclaims_per_sec:$page_reclaims_per_sec,oom_kills_delta:$oom_kills_delta"
+}
+
+memory_details=$(collect_memory_details)
 
 disk_total=$(sed_rt "$(to_num "$(($(df -P -B 1 | grep '^/' | awk '{ print $2 }' | sed -e :a -e '$!N;s/\n/+/;ta')))")")
 disk_usage=$(sed_rt "$(to_num "$(($(df -P -B 1 | grep '^/' | awk '{ print $3 }' | sed -e :a -e '$!N;s/\n/+/;ta')))")")
@@ -311,8 +484,8 @@ function collect_disk_snapshot() {
 
 function previous_disk_line() {
   local device="$1"
-  if [ -r /etc/syAgent/disk-data.log ]; then
-    awk -v device="$device" '$1 == device { print; exit }' /etc/syAgent/disk-data.log
+  if [ -r "$state_dir/disk-data.log" ]; then
+    awk -v device="$device" '$1 == device { print; exit }' "$state_dir/disk-data.log"
   fi
 }
 
@@ -375,7 +548,9 @@ function collect_disk_io() {
     disk_io="$disk_io""name:$(clean_kv_value "$device"),read_bytes_per_sec:$read_bps,write_bytes_per_sec:$write_bps,read_iops:$read_iops,write_iops:$write_iops,busy_percent:$busy_percent,total_read_bytes:$total_read_bytes,total_write_bytes:$total_write_bytes;"
   done <<< "$snapshot"
 
-  printf "%s\n" "$snapshot" | awk -v now="$now" '{ print $1" "now" "$2" "$3" "$4" "$5" "$6" "$7 }' >/etc/syAgent/disk-data.log
+  if [ "$dry_run" = false ]; then
+    printf "%s\n" "$snapshot" | awk -v now="$now" '{ print $1" "now" "$2" "$3" "$4" "$5" "$6" "$7 }' >"$state_dir/disk-data.log"
+  fi
   echo "$disk_io"
 }
 
@@ -671,8 +846,8 @@ cpu=$((${stat[0]} + ${stat[1]} + ${stat[2]} + ${stat[3]}))
 io=$((${stat[3]} + ${stat[4]}))
 idle=${stat[3]}
 
-if [ -e /etc/syAgent/pe-data.log ]; then
-  data=($(cat /etc/syAgent/pe-data.log))
+if [ -e "$state_dir/pe-data.log" ]; then
+  data=($(cat "$state_dir/pe-data.log"))
   previous_time=$(to_num "${data[0]}")
   previous_cpu=$(to_num "${data[1]}")
   previous_io=$(to_num "${data[2]}")
@@ -702,7 +877,9 @@ if [ -e /etc/syAgent/pe-data.log ]; then
   fi
 fi
 
-echo "$time $cpu $io $idle $rx $tx" >/etc/syAgent/pe-data.log
+if [ "$dry_run" = false ]; then
+  echo "$time $cpu $io $idle $rx $tx" >"$state_dir/pe-data.log"
+fi
 
 rx_gap=$(sed_rt "$(to_num "$rx_gap")")
 tx_gap=$(sed_rt "$(to_num "$tx_gap")")
@@ -738,17 +915,25 @@ else
   gpu_procs_info="nvidia-smi not available"
 fi
 
-multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details") $(to_base64 "$disk_io") $(to_base64 "$raid_details")"
+multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details") $(to_base64 "$disk_io") $(to_base64 "$raid_details") $(to_base64 "$memory_details")"
 
 if [ "$dry_run" = true ]; then
-  printf "%s\n" "$multipart_data"
+  printf "token=[REDACTED]&%s\n" "${multipart_data#*&}"
   exit 0
 fi
 
+request_file="$(mktemp "$state_dir/request.XXXXXX")" || exit 1
+chmod 0600 "$request_file"
+printf '%s' "$multipart_data" >"$request_file"
+trap 'rm -f "$request_file"' EXIT
+
 if [ -n "$(command -v timeout)" ]; then
-  timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
+  if ! timeout -s SIGKILL 30 wget -q -o /dev/null -O "$response_log" -T 25 --post-file "$request_file" "https://agent.syagent.com/agent"; then
+    echo "Error: Telemetry upload failed" >&2
+    exit 1
+  fi
 else
-  wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent" &
+  wget -q -o /dev/null -O "$response_log" -T 25 --post-file "$request_file" "https://agent.syagent.com/agent" &
   wget_process_id=$!
   wget_counter=0
   wget_timeout=30
@@ -758,7 +943,17 @@ else
     ((wget_counter++))
   done
 
-  kill -0 "$wget_process_id" && kill -s SIGKILL "$wget_process_id"
+  if kill -0 "$wget_process_id" 2>/dev/null; then
+    kill -s SIGKILL "$wget_process_id"
+    wait "$wget_process_id" 2>/dev/null || true
+    echo "Error: Telemetry upload timed out" >&2
+    exit 1
+  fi
+
+  if ! wait "$wget_process_id"; then
+    echo "Error: Telemetry upload failed" >&2
+    exit 1
+  fi
 fi
 
 exit 0
