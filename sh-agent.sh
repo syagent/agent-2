@@ -8,13 +8,39 @@ export DOCKER_HOST=unix:///var/run/docker.sock
 
 version="1.1.0"
 dry_run=false
+check_only=false
 
-if [ "$1" = "--dry-run" ] || [ "$1" = "--debug" ]; then
-  dry_run=true
-fi
+config_dir="${SYAGENT_CONFIG_DIR:-/etc/syAgent}"
+state_dir="${SYAGENT_STATE_DIR:-/var/lib/syAgent}"
+log_dir="${SYAGENT_LOG_DIR:-/var/log/syAgent}"
+auth_file="$config_dir/sa-auth.log"
+response_log="$log_dir/sh-agent.log"
 
-if [ -f /etc/syAgent/sa-auth.log ]; then
-  read -r token < /etc/syAgent/sa-auth.log
+case "${1:-}" in
+  --dry-run | --debug | --print-telemetry)
+    dry_run=true
+    ;;
+  --check)
+    check_only=true
+    ;;
+  --version)
+    printf '%s\n' "$version"
+    exit 0
+    ;;
+  -h | --help)
+    printf '%s\n' "Usage: sh-agent.sh [--check|--dry-run|--print-telemetry|--version]"
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    printf 'Error: Unknown option: %s\n' "$1" >&2
+    exit 1
+    ;;
+esac
+
+if [ -f "$auth_file" ]; then
+  read -r token < "$auth_file"
 else
   echo "Error: Auth file required"
   exit 1
@@ -60,6 +86,23 @@ function require_commands() {
 }
 
 require_commands awk base64 cat date df grep head ps sed tail tr uname wc wget who
+
+if [ "$check_only" = true ]; then
+  [ -r "$auth_file" ] || {
+    echo "Error: Auth file is not readable"
+    exit 1
+  }
+  [ -d "$state_dir" ] && [ -w "$state_dir" ] || {
+    echo "Error: State directory is not writable: $state_dir"
+    exit 1
+  }
+  [ -d "$log_dir" ] && [ -w "$log_dir" ] || {
+    echo "Error: Log directory is not writable: $log_dir"
+    exit 1
+  }
+  echo "SyAgent check passed"
+  exit 0
+fi
 
 function command_output() {
   if command -v "$1" >/dev/null 2>&1; then
@@ -354,11 +397,11 @@ function collect_memory_details() {
   pgsteal=$(vmstat_sum "pgsteal_kswapd" "pgsteal_direct" "pgsteal_khugepaged")
   oom_kill=$(to_num "$(vmstat_value "oom_kill")")
 
-  if [ -r /etc/syAgent/memory-data.log ]; then
+  if [ -r "$state_dir/memory-data.log" ]; then
     local previous_time previous_pgfault previous_pgmajfault previous_pswpin previous_pswpout
     local previous_pgscan previous_pgsteal previous_oom_kill
     read -r previous_time previous_pgfault previous_pgmajfault previous_pswpin previous_pswpout \
-      previous_pgscan previous_pgsteal previous_oom_kill < /etc/syAgent/memory-data.log
+      previous_pgscan previous_pgsteal previous_oom_kill < "$state_dir/memory-data.log"
     previous_time=$(to_num "$previous_time")
     interval=$((now - previous_time))
 
@@ -375,7 +418,9 @@ function collect_memory_details() {
     fi
   fi
 
-  echo "$now $pgfault $pgmajfault $pswpin $pswpout $pgscan $pgsteal $oom_kill" >/etc/syAgent/memory-data.log
+  if [ "$dry_run" = false ]; then
+    echo "$now $pgfault $pgmajfault $pswpin $pswpout $pgscan $pgsteal $oom_kill" >"$state_dir/memory-data.log"
+  fi
 
   if [ -r /proc/pressure/memory ]; then
     psi_available=true
@@ -440,8 +485,8 @@ function collect_disk_snapshot() {
 
 function previous_disk_line() {
   local device="$1"
-  if [ -r /etc/syAgent/disk-data.log ]; then
-    awk -v device="$device" '$1 == device { print; exit }' /etc/syAgent/disk-data.log
+  if [ -r "$state_dir/disk-data.log" ]; then
+    awk -v device="$device" '$1 == device { print; exit }' "$state_dir/disk-data.log"
   fi
 }
 
@@ -504,7 +549,9 @@ function collect_disk_io() {
     disk_io="$disk_io""name:$(clean_kv_value "$device"),read_bytes_per_sec:$read_bps,write_bytes_per_sec:$write_bps,read_iops:$read_iops,write_iops:$write_iops,busy_percent:$busy_percent,total_read_bytes:$total_read_bytes,total_write_bytes:$total_write_bytes;"
   done <<< "$snapshot"
 
-  printf "%s\n" "$snapshot" | awk -v now="$now" '{ print $1" "now" "$2" "$3" "$4" "$5" "$6" "$7 }' >/etc/syAgent/disk-data.log
+  if [ "$dry_run" = false ]; then
+    printf "%s\n" "$snapshot" | awk -v now="$now" '{ print $1" "now" "$2" "$3" "$4" "$5" "$6" "$7 }' >"$state_dir/disk-data.log"
+  fi
   echo "$disk_io"
 }
 
@@ -800,8 +847,8 @@ cpu=$((${stat[0]} + ${stat[1]} + ${stat[2]} + ${stat[3]}))
 io=$((${stat[3]} + ${stat[4]}))
 idle=${stat[3]}
 
-if [ -e /etc/syAgent/pe-data.log ]; then
-  data=($(cat /etc/syAgent/pe-data.log))
+if [ -e "$state_dir/pe-data.log" ]; then
+  data=($(cat "$state_dir/pe-data.log"))
   previous_time=$(to_num "${data[0]}")
   previous_cpu=$(to_num "${data[1]}")
   previous_io=$(to_num "${data[2]}")
@@ -831,7 +878,9 @@ if [ -e /etc/syAgent/pe-data.log ]; then
   fi
 fi
 
-echo "$time $cpu $io $idle $rx $tx" >/etc/syAgent/pe-data.log
+if [ "$dry_run" = false ]; then
+  echo "$time $cpu $io $idle $rx $tx" >"$state_dir/pe-data.log"
+fi
 
 rx_gap=$(sed_rt "$(to_num "$rx_gap")")
 tx_gap=$(sed_rt "$(to_num "$tx_gap")")
@@ -870,14 +919,22 @@ fi
 multipart_data="token=$token&data=$(to_base64 "$version") $(to_base64 "$uptime") $(to_base64 "$sessions") $(to_base64 "$processes") $(to_base64 "$processes_list") $(to_base64 "$file_handles") $(to_base64 "$file_handles_limit") $(to_base64 "$os_kernel") $(to_base64 "$os_name") $(to_base64 "$os_arch") $(to_base64 "$cpu_name") $(to_base64 "$cpu_cores") $(to_base64 "$cpu_freq") $(to_base64 "$ram_total") $(to_base64 "$ram_usage") $(to_base64 "$swap_total") $(to_base64 "$swap_usage") $(to_base64 "$disk_array") $(to_base64 "$disk_total") $(to_base64 "$disk_usage") $(to_base64 "$connections") $(to_base64 "$nic") $(to_base64 "$ipv4") $(to_base64 "$ipv6") $(to_base64 "$rx") $(to_base64 "$tx") $(to_base64 "$rx_gap") $(to_base64 "$tx_gap") $(to_base64 "$load") $(to_base64 "$load_cpu") $(to_base64 "$load_io") $(to_base64 "$apps_info") $(to_base64 "success_attempts:$success_attempts,failed_attempts:$failed_attempts") $(to_base64 "$gpu_info") $(to_base64 "$gpu_procs_info") $(to_base64 "$cpu_details") $(to_base64 "$host_details") $(to_base64 "$disk_io") $(to_base64 "$raid_details") $(to_base64 "$memory_details")"
 
 if [ "$dry_run" = true ]; then
-  printf "%s\n" "$multipart_data"
+  printf "token=[REDACTED]&%s\n" "${multipart_data#*&}"
   exit 0
 fi
 
+request_file="$(mktemp "$state_dir/request.XXXXXX")" || exit 1
+chmod 0600 "$request_file"
+printf '%s' "$multipart_data" >"$request_file"
+trap 'rm -f "$request_file"' EXIT
+
 if [ -n "$(command -v timeout)" ]; then
-  timeout -s SIGKILL 30 wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent"
+  if ! timeout -s SIGKILL 30 wget -q -o /dev/null -O "$response_log" -T 25 --post-file "$request_file" "https://agent.syagent.com/agent"; then
+    echo "Error: Telemetry upload failed" >&2
+    exit 1
+  fi
 else
-  wget -q -o /dev/null -O /etc/syAgent/sh-agent.log -T 25 --post-data "$multipart_data" --no-check-certificate "https://agent.syagent.com/agent" &
+  wget -q -o /dev/null -O "$response_log" -T 25 --post-file "$request_file" "https://agent.syagent.com/agent" &
   wget_process_id=$!
   wget_counter=0
   wget_timeout=30
@@ -887,7 +944,17 @@ else
     ((wget_counter++))
   done
 
-  kill -0 "$wget_process_id" && kill -s SIGKILL "$wget_process_id"
+  if kill -0 "$wget_process_id" 2>/dev/null; then
+    kill -s SIGKILL "$wget_process_id"
+    wait "$wget_process_id" 2>/dev/null || true
+    echo "Error: Telemetry upload timed out" >&2
+    exit 1
+  fi
+
+  if ! wait "$wget_process_id"; then
+    echo "Error: Telemetry upload failed" >&2
+    exit 1
+  fi
 fi
 
 exit 0

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SyAgent every minute
+Documentation=https://github.com/syagent/agent-2
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+AccuracySec=1s
+Unit=syagent.service
+
+[Install]
+WantedBy=timers.target
