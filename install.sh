@@ -1,5 +1,5 @@
 #!/bin/bash
-# @version 1.1.0
+# @version 1.2.0
 
 set -Eeuo pipefail
 umask 027
@@ -13,12 +13,12 @@ readonly STATE_DIR="/var/lib/syAgent"
 readonly LOG_DIR="/var/log/syAgent"
 readonly SYSTEMD_DIR="/etc/systemd/system"
 readonly AGENT_USER="syAgent"
+readonly TRUSTED_RELEASE_FINGERPRINTS="8174245629A3C612E8797E0304E952757DA5F0B2"
 
 release_version=""
 token=""
 token_file=""
 read_token_stdin=false
-signature_file=""
 positional_token_used=false
 staging_dir=""
 backup_dir=""
@@ -32,10 +32,9 @@ Usage:
   printf '%s' "$SYAGENT_TOKEN" | sudo ./install.sh --version VERSION --token-stdin
 
 Options:
-  --version VERSION       Install a pinned GitHub release (for example, 1.1.0).
+  --version VERSION       Install a pinned GitHub release (for example, 1.2.0).
   --token-file PATH       Read the token from a file.
   --token-stdin           Read the token from standard input.
-  --signature-file PATH   Verify SHA256SUMS with this detached GPG signature.
   -h, --help              Show this help.
 
 A positional token is temporarily supported for compatibility, but it may be
@@ -148,6 +147,85 @@ verify_checksum() {
   fi
 }
 
+write_release_public_keys() {
+  cat >"$1" <<'EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mDMEaiV1qBYJKwYBBAHaRw8BAQdAbGTndJ9L5sSNdsOG9Yv4Li8db3CnnTW9KPni
+k+inDLS0LlN5QWdlbnQgUmVsZWFzZSBTaWduaW5nIDxyZWxlYXNlc0BzeWFnZW50
+LmNvbT6ImQQTFgoAQRYhBIF0JFYpo8YS6Hl+AwTpUnV9pfCyBQJqJXWoAhsDBQkF
+o5qABQsJCAcCAiICBhUKCQgLAgQWAgMBAh4HAheAAAoJEATpUnV9pfCyxmoBAI4Z
+XUVWLc8+EcaxBkf3K6uuEgm7X1fT1MeIgQujT3LeAP4iaLinRaC3q4JnREL5eRtC
+3T50bw0lMPGgg7SMgN36DA==
+=y0US
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+}
+
+fingerprint_is_trusted() {
+  local candidate="$1"
+  local trusted_fingerprint
+
+  for trusted_fingerprint in $TRUSTED_RELEASE_FINGERPRINTS; do
+    if [ "$candidate" = "$trusted_fingerprint" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+verify_release_signature() {
+  local checksum_file="$1"
+  local signature_file="$2"
+  local public_key_file="$staging_dir/release-signing-keys.asc"
+  local gpg_home="$staging_dir/gnupg"
+  local status_file="$staging_dir/gpg-status"
+  local fingerprint=""
+  local imported_fingerprints=""
+  local valid_signature_fingerprint=""
+
+  command -v gpg >/dev/null 2>&1 ||
+    fail "gpg is required for mandatory release signature verification"
+
+  mkdir -m 0700 "$gpg_home"
+  write_release_public_keys "$public_key_file"
+
+  imported_fingerprints="$(
+    gpg --batch --homedir "$gpg_home" --with-colons \
+      --import-options show-only --import "$public_key_file" 2>/dev/null |
+      awk -F: '$1 == "pub" { want_fpr = 1; next } want_fpr && $1 == "fpr" { print $10; want_fpr = 0 }'
+  )"
+  [ -n "$imported_fingerprints" ] ||
+    fail "embedded release signing key is invalid"
+
+  for fingerprint in $imported_fingerprints; do
+    fingerprint_is_trusted "$fingerprint" ||
+      fail "embedded release key fingerprint is not trusted: $fingerprint"
+  done
+
+  for fingerprint in $TRUSTED_RELEASE_FINGERPRINTS; do
+    printf '%s\n' "$imported_fingerprints" | grep -Fx "$fingerprint" >/dev/null ||
+      fail "trusted release key is missing from the embedded key bundle: $fingerprint"
+  done
+
+  gpg --batch --homedir "$gpg_home" --import "$public_key_file" >/dev/null 2>&1 ||
+    fail "could not import the embedded release signing key"
+
+  if ! gpg --batch --homedir "$gpg_home" --status-fd 1 \
+    --verify "$signature_file" "$checksum_file" >"$status_file" 2>/dev/null; then
+    fail "SHA256SUMS signature verification failed"
+  fi
+
+  valid_signature_fingerprint="$(
+    awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3; exit }' "$status_file"
+  )"
+  [ -n "$valid_signature_fingerprint" ] ||
+    fail "release signature did not identify a valid signing key"
+  fingerprint_is_trusted "$valid_signature_fingerprint" ||
+    fail "release was signed by an untrusted key: $valid_signature_fingerprint"
+}
+
 remove_agent_cron() {
   local cron_user="$1"
   local existing_cron
@@ -202,11 +280,6 @@ while [ "$#" -gt 0 ]; do
       read_token_stdin=true
       shift
       ;;
-    --signature-file)
-      [ "$#" -ge 2 ] || fail "--signature-file requires a path"
-      signature_file="$2"
-      shift 2
-      ;;
     -h | --help)
       usage
       exit 0
@@ -240,21 +313,19 @@ fi
 
 command -v wget >/dev/null 2>&1 ||
   fail "wget is required by the installed monitoring agent"
+command -v gpg >/dev/null 2>&1 ||
+  fail "gpg is required for mandatory release signature verification"
 
 release_tag="v${release_version}"
 release_base="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
 staging_dir="$(mktemp -d "${CONFIG_DIR}.install.XXXXXX")"
 checksum_file="$staging_dir/SHA256SUMS"
+signature_file="$staging_dir/SHA256SUMS.asc"
 
 log "Downloading SyAgent ${release_version} release artifacts..."
 download_file "$release_base/SHA256SUMS" "$checksum_file"
-
-if [ -n "$signature_file" ]; then
-  command -v gpg >/dev/null 2>&1 || fail "gpg is required for signature verification"
-  [ -f "$signature_file" ] || fail "signature file does not exist: $signature_file"
-  gpg --verify "$signature_file" "$checksum_file" ||
-    fail "SHA256SUMS signature verification failed"
-fi
+download_file "$release_base/SHA256SUMS.asc" "$signature_file"
+verify_release_signature "$checksum_file" "$signature_file"
 
 for artifact_name in sh-agent.sh uninstall.sh syagent.service syagent.timer; do
   download_file "$release_base/$artifact_name" "$staging_dir/$artifact_name"
@@ -284,7 +355,9 @@ chmod 0644 "$staging_dir/VERSION"
 rm -f "$staging_dir/sh-agent.sh" "$staging_dir/uninstall.sh"
 mv "$staging_dir/installed-sh-agent.sh" "$staging_dir/sh-agent.sh"
 mv "$staging_dir/installed-uninstall.sh" "$staging_dir/uninstall.sh"
-rm -f "$staging_dir/SHA256SUMS"
+rm -rf "$staging_dir/SHA256SUMS" "$staging_dir/SHA256SUMS.asc" \
+  "$staging_dir/release-signing-keys.asc" "$staging_dir/gpg-status" \
+  "$staging_dir/gnupg"
 chown root:root "$staging_dir"
 chmod 0755 "$staging_dir"
 

@@ -8,9 +8,8 @@ SyAgent collector over HTTPS.
 
 - Releases are installed by an explicit version, never from the mutable `main`
   branch.
-- Release files are verified against `SHA256SUMS` before installation.
-- Detached GPG verification is supported when the signing key is already
-  trusted by the administrator.
+- Every release requires a detached GPG signature from the pinned SyAgent
+  release key before checksums or artifacts are trusted.
 - TLS certificate verification is mandatory for downloads and telemetry.
 - The agent runs as `syAgent`; it does not run as root.
 - Executables and configuration are owned by root and cannot be modified by
@@ -26,25 +25,63 @@ SyAgent collector over HTTPS.
 See [SECURITY.md](SECURITY.md) for the threat model, verification details, and
 vulnerability reporting guidance.
 
-## Verified Installation
+## Quick Installation
 
-Choose a published release version and download the installer and checksums:
+Download the pinned GitHub release installer and run it with the server ID from
+the SyAgent dashboard:
 
 ```zsh
-VERSION="1.1.0"
+wget -q https://github.com/syagent/agent-2/releases/download/v1.2.0/install.sh && sudo bash install.sh --version 1.2.0 SERVER_ID
+```
+
+This command trusts GitHub and HTTPS for the initial public installer. The
+installer then requires the pinned SyAgent GPG signature and verified checksums
+for every remaining release artifact. Use the manual process below to
+authenticate the initial installer independently.
+
+## Verified Installation
+
+The SyAgent release-signing fingerprint is:
+
+```text
+8174 2456 29A3 C612 E879 7E03 04E9 5275 7DA5 F0B2
+```
+
+Confirm this fingerprint through the SyAgent dashboard or the SyAgent website's
+security page before trusting the copy published on GitHub.
+
+Choose a published release version and authenticate the installer before
+executing it:
+
+```zsh
+VERSION="1.2.0"
 BASE_URL="https://github.com/syagent/agent-2/releases/download/v${VERSION}"
+GNUPGHOME="$(mktemp -d)"
+chmod 700 "$GNUPGHOME"
+export GNUPGHOME
 
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "${BASE_URL}/install.sh"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output SHA256SUMS "${BASE_URL}/SHA256SUMS"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output SHA256SUMS.asc "${BASE_URL}/SHA256SUMS.asc"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output release-signing-key.asc "${BASE_URL}/release-signing-key.asc"
 
+gpg --batch --import release-signing-key.asc
+gpg --batch --fingerprint releases@syagent.com
+gpg --batch --verify SHA256SUMS.asc SHA256SUMS
 grep ' install.sh$' SHA256SUMS | sha256sum --check --strict -
 chmod +x install.sh
 sudo ./install.sh --version "$VERSION"
+
+rm -rf "$GNUPGHOME"
+unset GNUPGHOME
 ```
 
-On systems without `sha256sum`, use:
+The fingerprint printed by GPG must exactly match the value above and the
+separately published SyAgent fingerprint. On systems without `sha256sum`, use:
 
 ```zsh
 grep ' install.sh$' SHA256SUMS | shasum --algorithm 256 --check -
@@ -63,23 +100,8 @@ printf '%s\n' "$SYAGENT_TOKEN" |
 ```
 
 A positional token remains supported for compatibility, but it can be recorded
-in shell history and should be avoided.
-
-### Optional GPG Verification
-
-If the SyAgent release signing key is already trusted in the local GPG keyring,
-download the detached signature and verify it before installation:
-
-```zsh
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --output SHA256SUMS.asc "${BASE_URL}/SHA256SUMS.asc"
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sudo ./install.sh --version "$VERSION" --signature-file SHA256SUMS.asc
-```
-
-Checksum verification protects against corrupted or mismatched downloads. GPG
-verification additionally authenticates the checksum file through a separately
-trusted signing key.
+in shell history and should be avoided. During installation, signature
+verification is automatic and cannot be disabled.
 
 ## Installation Layout
 
@@ -147,6 +169,8 @@ unchanged from the existing agent payload.
 
 - Aggregate counts of accepted and failed password/public-key events readable
   from `/var/log/auth.log` or `/var/log/secure`
+- These counters are zero when the unprivileged account or systemd sandbox
+  cannot read the host authentication logs
 - Log message bodies, passwords, and key material are not transmitted
 
 The token and payload are form encoded for the existing collector API. Base64
@@ -202,19 +226,20 @@ installed files, runtime state/logs, and dedicated user.
 - Root privileges for installation and uninstallation
 - Bash and standard Linux utilities
 - `curl` or `wget` for installation; `wget` for the installed agent
+- GnuPG
 - `sha256sum` or `shasum`
 - systemd, or cron as a fallback
 
 ## Release Packaging
 
-Maintainers can produce release assets locally:
+Maintainers must provide the dedicated release-signing private key through
+their protected GPG home. Unsigned releases are refused:
 
 ```zsh
-./scripts/build-release.sh 1.1.0
+GNUPGHOME="/secure/release-gnupg" \
+GPG_KEY_ID="8174245629A3C612E8797E0304E952757DA5F0B2" \
+  ./scripts/build-release.sh 1.2.0
 ```
 
-Set `GPG_KEY_ID` to create `SHA256SUMS.asc` with an existing signing key:
-
-```zsh
-GPG_KEY_ID="SIGNING_KEY_FINGERPRINT" ./scripts/build-release.sh 1.1.0
-```
+The build fails unless the private key, committed public key, and pinned
+fingerprint all match.

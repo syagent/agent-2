@@ -1,12 +1,11 @@
 #!/bin/bash
-# @version		1.1.0
+# @version		1.2.0
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export DOCKER_HOST=unix:///var/run/docker.sock
 
-version="1.1.0"
+version="1.2.0"
 dry_run=false
 check_only=false
 

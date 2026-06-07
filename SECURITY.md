@@ -15,19 +15,38 @@ and request a private security contact.
 
 SyAgent releases are immutable, versioned artifacts. Administrators should:
 
-1. Download `install.sh` and `SHA256SUMS` from the same explicit release.
-2. Verify the installer checksum before executing it.
-3. Verify `SHA256SUMS.asc` when a trusted SyAgent signing key is available.
-4. Pass the same explicit version to the installer.
+1. Obtain the release-key fingerprint through the SyAgent dashboard or SyAgent
+   website security page, independently of GitHub.
+2. Download the public key, `install.sh`, `SHA256SUMS`, and `SHA256SUMS.asc`
+   from the same explicit release.
+3. Confirm the public-key fingerprint is exactly
+   `8174245629A3C612E8797E0304E952757DA5F0B2`.
+4. Verify the signature and installer checksum before executing the installer.
+5. Pass the same explicit version to the installer.
 
-The installer downloads the remaining files from that release and refuses to
-install files that do not match `SHA256SUMS`. It never downloads executable
-content from the `main` branch.
+The installer embeds the same public key and fingerprint. It downloads the
+signature automatically, verifies it in an isolated temporary GPG home, and
+refuses to process checksums signed by any other key. It then refuses to install
+files that do not match the authenticated `SHA256SUMS`. It never downloads
+executable content from the `main` branch.
 
-A checksum alone detects accidental corruption and mismatched artifacts. It
-does not establish publisher identity if an attacker can replace both the
-artifact and checksum. Detached signatures provide that additional property
-only when the signing key was obtained and trusted through a separate channel.
+A checksum alone does not establish publisher identity if an attacker can
+replace both the artifact and checksum. Mandatory signatures address this only
+when the pinned fingerprint is also confirmed through a separate SyAgent
+channel before the initial installer is executed.
+
+## Release Key Management
+
+The dedicated release private key must remain outside this repository and be
+available only to the protected release environment. The repository contains
+only the armored public key and full fingerprint.
+
+To rotate the key, first publish an installer release containing both old and
+new public keys and fingerprints, with `SHA256SUMS` signed by the old key. After
+that release is broadly available, releases may be signed by the new key. The
+old key may be removed from a later installer release. A lost or compromised
+key requires an explicit incident response and independent redistribution of
+the replacement fingerprint.
 
 ## Privilege Model
 
@@ -43,7 +62,9 @@ limits network socket families.
 
 Some telemetry is available only when the operating system permits the
 unprivileged account to read it. The installer does not grant extra privileges
-to bypass host log, process, GPU, or kernel-data permissions.
+to bypass host log, process, GPU, or kernel-data permissions. In particular,
+`ProtectKernelLogs=true` and normal authentication-log permissions commonly
+cause SSH success/failure counters to remain zero; collection continues.
 
 ## Credential Handling
 
