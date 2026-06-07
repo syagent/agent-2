@@ -26,6 +26,20 @@ install_committed=false
 config_replaced=false
 current_step="initialization"
 
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  readonly GREEN=$'\033[32m'
+  readonly RESET=$'\033[0m'
+else
+  readonly GREEN=""
+  readonly RESET=""
+fi
+
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  readonly RED=$'\033[31m'
+else
+  readonly RED=""
+fi
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -45,11 +59,11 @@ EOF
 }
 
 log() {
-  printf '%s\n' "$*"
+  printf '%s%s%s\n' "$GREEN" "$*" "$RESET"
 }
 
 fail() {
-  printf 'Error: %s\n' "$*" >&2
+  printf '%sError: %s%s\n' "$RED" "$*" "$RESET" >&2
   exit 1
 }
 
@@ -58,8 +72,8 @@ on_error() {
   local line_number="$2"
 
   trap - ERR
-  printf 'Error: Installation failed during %s (line %s, exit %s)\n' \
-    "$current_step" "$line_number" "$exit_code" >&2
+  printf '%sError: Installation failed during %s (line %s, exit %s)%s\n' \
+    "$RED" "$current_step" "$line_number" "$exit_code" "$RESET" >&2
   exit "$exit_code"
 }
 
