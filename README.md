@@ -27,17 +27,16 @@ vulnerability reporting guidance.
 
 ## Quick Installation
 
-Download the pinned GitHub release installer and run it with the server ID from
-the SyAgent dashboard:
+Download the public installer from the GitHub `main` branch and run it with the
+server ID from the SyAgent dashboard:
 
 ```zsh
-wget -q https://github.com/syagent/agent-2/releases/download/v1.2.0/install.sh && sudo bash install.sh --version 1.2.0 SERVER_ID
+wget -q https://raw.githubusercontent.com/syagent/agent-2/main/install.sh && sudo bash install.sh SERVER_ID
 ```
 
-This command trusts GitHub and HTTPS for the initial public installer. The
-installer then requires the pinned SyAgent GPG signature and verified checksums
-for every remaining release artifact. Use the manual process below to
-authenticate the initial installer independently.
+This simple flow trusts GitHub, HTTPS, and the current public `main` branch.
+Use the signed release process below when an immutable, independently verified
+installation is required.
 
 ## Verified Installation
 

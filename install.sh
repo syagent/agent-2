@@ -28,11 +28,12 @@ config_replaced=false
 usage() {
   cat <<'EOF'
 Usage:
+  sudo ./install.sh TOKEN
   sudo ./install.sh --version VERSION [--token-file PATH]
   printf '%s' "$SYAGENT_TOKEN" | sudo ./install.sh --version VERSION --token-stdin
 
 Options:
-  --version VERSION       Install a pinned GitHub release (for example, 1.2.0).
+  --version VERSION       Install a pinned, signed GitHub release.
   --token-file PATH       Read the token from a file.
   --token-stdin           Read the token from standard input.
   -h, --help              Show this help.
@@ -298,13 +299,14 @@ done
 
 [ "$(id -u)" -eq 0 ] || fail "run the installer as root"
 [ "$(uname -s)" = "Linux" ] || fail "SyAgent currently supports Linux only"
-[ -n "$release_version" ] || fail "--version is required"
 [ -z "$token_file" ] || [ "$read_token_stdin" = false ] ||
   fail "--token-file and --token-stdin cannot be used together"
 [ -z "$token" ] || { [ -z "$token_file" ] && [ "$read_token_stdin" = false ]; } ||
   fail "a positional token cannot be combined with another token source"
 
-validate_version
+if [ -n "$release_version" ]; then
+  validate_version
+fi
 read_token
 
 if [ "$positional_token_used" = true ]; then
@@ -313,24 +315,35 @@ fi
 
 command -v wget >/dev/null 2>&1 ||
   fail "wget is required by the installed monitoring agent"
-command -v gpg >/dev/null 2>&1 ||
-  fail "gpg is required for mandatory release signature verification"
-
-release_tag="v${release_version}"
-release_base="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
 staging_dir="$(mktemp -d "${CONFIG_DIR}.install.XXXXXX")"
-checksum_file="$staging_dir/SHA256SUMS"
-signature_file="$staging_dir/SHA256SUMS.asc"
 
-log "Downloading SyAgent ${release_version} release artifacts..."
-download_file "$release_base/SHA256SUMS" "$checksum_file"
-download_file "$release_base/SHA256SUMS.asc" "$signature_file"
-verify_release_signature "$checksum_file" "$signature_file"
+if [ -n "$release_version" ]; then
+  command -v gpg >/dev/null 2>&1 ||
+    fail "gpg is required for mandatory release signature verification"
 
-for artifact_name in sh-agent.sh uninstall.sh syagent.service syagent.timer; do
-  download_file "$release_base/$artifact_name" "$staging_dir/$artifact_name"
-  verify_checksum "$checksum_file" "$staging_dir/$artifact_name"
-done
+  release_tag="v${release_version}"
+  release_base="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
+  checksum_file="$staging_dir/SHA256SUMS"
+  signature_file="$staging_dir/SHA256SUMS.asc"
+
+  log "Downloading signed SyAgent ${release_version} release artifacts..."
+  download_file "$release_base/SHA256SUMS" "$checksum_file"
+  download_file "$release_base/SHA256SUMS.asc" "$signature_file"
+  verify_release_signature "$checksum_file" "$signature_file"
+
+  for artifact_name in sh-agent.sh uninstall.sh syagent.service syagent.timer; do
+    download_file "$release_base/$artifact_name" "$staging_dir/$artifact_name"
+    verify_checksum "$checksum_file" "$staging_dir/$artifact_name"
+  done
+else
+  release_version="main"
+  release_base="https://raw.githubusercontent.com/${REPOSITORY}/main"
+
+  log "Downloading SyAgent from the public main branch..."
+  for artifact_name in sh-agent.sh uninstall.sh syagent.service syagent.timer; do
+    download_file "$release_base/$artifact_name" "$staging_dir/$artifact_name"
+  done
+fi
 
 bash -n "$staging_dir/sh-agent.sh"
 bash -n "$staging_dir/uninstall.sh"
