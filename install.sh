@@ -24,6 +24,7 @@ staging_dir=""
 backup_dir=""
 install_committed=false
 config_replaced=false
+current_step="initialization"
 
 usage() {
   cat <<'EOF'
@@ -52,6 +53,16 @@ fail() {
   exit 1
 }
 
+on_error() {
+  local exit_code="$1"
+  local line_number="$2"
+
+  trap - ERR
+  printf 'Error: Installation failed during %s (line %s, exit %s)\n' \
+    "$current_step" "$line_number" "$exit_code" >&2
+  exit "$exit_code"
+}
+
 cleanup() {
   local exit_code=$?
 
@@ -73,6 +84,7 @@ cleanup() {
   exit "$exit_code"
 }
 
+trap 'on_error $? $LINENO' ERR
 trap cleanup EXIT
 
 validate_version() {
@@ -109,14 +121,22 @@ read_token() {
 download_file() {
   local url="$1"
   local destination="$2"
+  local artifact_name
 
-  if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent --show-error --location \
+  artifact_name="$(basename "$destination")"
+
+  if command -v wget >/dev/null 2>&1; then
+    if ! wget --https-only --timeout=30 --tries=2 --quiet \
+      --output-document="$destination" "$url"; then
+      fail "could not download $artifact_name from $url"
+    fi
+  elif command -v curl >/dev/null 2>&1; then
+    if ! curl --fail --silent --show-error --location \
       --proto '=https' --tlsv1.2 \
-      --connect-timeout 15 --max-time 120 \
-      --output "$destination" "$url"
-  elif command -v wget >/dev/null 2>&1; then
-    wget --https-only --timeout=30 --tries=2 --output-document="$destination" "$url"
+      --connect-timeout 15 --max-time 60 \
+      --output "$destination" "$url"; then
+      fail "could not download $artifact_name from $url"
+    fi
   else
     fail "curl or wget is required"
   fi
@@ -247,7 +267,6 @@ install_systemd_runtime() {
   remove_agent_cron "$AGENT_USER"
   systemctl daemon-reload
   systemctl enable --now syagent.timer
-  log "Runtime: systemd timer"
 }
 
 install_cron_runtime() {
@@ -261,8 +280,6 @@ install_cron_runtime() {
     printf '%s\n' "$existing_cron" | grep -v -F "/etc/syAgent/sh-agent.sh"
     printf '%s\n' "*/1 * * * * /bin/bash /etc/syAgent/sh-agent.sh >> /var/log/syAgent/cron.log 2>&1"
   } | crontab -u "$AGENT_USER" -
-
-  log "Runtime: cron"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -309,15 +326,14 @@ if [ -n "$release_version" ]; then
 fi
 read_token
 
-if [ "$positional_token_used" = true ]; then
-  log "Warning: positional tokens may be stored in shell history."
-fi
+log "Preparing SyAgent installation..."
 
 command -v wget >/dev/null 2>&1 ||
   fail "wget is required by the installed monitoring agent"
 staging_dir="$(mktemp -d "${CONFIG_DIR}.install.XXXXXX")"
 
 if [ -n "$release_version" ]; then
+  current_step="signed release download"
   command -v gpg >/dev/null 2>&1 ||
     fail "gpg is required for mandatory release signature verification"
 
@@ -326,7 +342,6 @@ if [ -n "$release_version" ]; then
   checksum_file="$staging_dir/SHA256SUMS"
   signature_file="$staging_dir/SHA256SUMS.asc"
 
-  log "Downloading signed SyAgent ${release_version} release artifacts..."
   download_file "$release_base/SHA256SUMS" "$checksum_file"
   download_file "$release_base/SHA256SUMS.asc" "$signature_file"
   verify_release_signature "$checksum_file" "$signature_file"
@@ -336,10 +351,10 @@ if [ -n "$release_version" ]; then
     verify_checksum "$checksum_file" "$staging_dir/$artifact_name"
   done
 else
+  current_step="main branch download"
   release_version="main"
   release_base="https://raw.githubusercontent.com/${REPOSITORY}/main"
 
-  log "Downloading SyAgent from the public main branch..."
   for artifact_name in sh-agent.sh uninstall.sh syagent.service syagent.timer; do
     download_file "$release_base/$artifact_name" "$staging_dir/$artifact_name"
   done
@@ -347,6 +362,7 @@ fi
 
 bash -n "$staging_dir/sh-agent.sh"
 bash -n "$staging_dir/uninstall.sh"
+current_step="file installation"
 
 if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
   nologin_shell="/usr/sbin/nologin"
@@ -383,15 +399,16 @@ staging_dir=""
 config_replaced=true
 
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  current_step="systemd configuration"
+  log "Configuring SyAgent..."
   install_systemd_runtime
 else
+  current_step="cron configuration"
+  log "Configuring SyAgent..."
   install_cron_runtime
 fi
 
 install_committed=true
 token=""
 
-log "SyAgent ${release_version} installed successfully."
-log "Configuration: $CONFIG_DIR"
-log "State: $STATE_DIR"
-log "Logs: $LOG_DIR"
+log "SyAgent installed successfully."
