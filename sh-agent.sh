@@ -1,11 +1,11 @@
 #!/bin/bash
-# @version		1.2.0
+# @version		1.2.1
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-version="1.2.0"
+version="1.2.1"
 dry_run=false
 check_only=false
 
@@ -818,9 +818,30 @@ if [ -n "$(command -v ip)" ]; then
   fi
 fi
 
-if [ -n "$nic" ]; then
+if [ -z "$nic" ] && [ -r /proc/net/route ]; then
+  nic=$(awk '$2 == "00000000" && $1 != "lo" { print $1; exit }' /proc/net/route 2>/dev/null)
+fi
+
+if [ -z "$nic" ] && [ -d /sys/class/net ]; then
+  for interface_path in /sys/class/net/*; do
+    interface_name="${interface_path##*/}"
+    if [ "$interface_name" = "lo" ]; then
+      continue
+    fi
+    if [ -r "$interface_path/operstate" ] && [ "$(cat "$interface_path/operstate" 2>/dev/null)" != "up" ]; then
+      continue
+    fi
+    nic="$interface_name"
+    break
+  done
+fi
+
+if [ -n "$nic" ] && [ -n "$(command -v ip)" ]; then
   ipv4=$(sed_rt "$(ip addr show "$nic" | grep 'inet ' | awk '{ print $2 }' | awk -F\/ '{ print $1 }' | grep -v '^127' | awk '{ print $0 } END { if (!NR) print "N/A" }')")
   ipv6=$(sed_rt "$(ip addr show "$nic" | grep 'inet6 ' | awk '{ print $2 }' | awk -F\/ '{ print $1 }' | grep -v '^::' | grep -v '^0000:' | grep -v '^fe80:' | awk '{ print $0 } END { if (!NR) print "N/A" }')")
+elif [ -n "$nic" ]; then
+  ipv4="N/A"
+  ipv6="N/A"
 else
   nic="N/A"
   ipv4="N/A"

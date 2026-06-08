@@ -53,7 +53,7 @@ Choose a published release version and authenticate the installer before
 executing it:
 
 ```zsh
-VERSION="1.2.0"
+VERSION="1.2.1"
 BASE_URL="https://github.com/syagent/agent-2/releases/download/v${VERSION}"
 GNUPGHOME="$(mktemp -d)"
 chmod 700 "$GNUPGHOME"
@@ -237,7 +237,7 @@ their protected GPG home. Unsigned releases are refused:
 ```zsh
 GNUPGHOME="/secure/release-gnupg" \
 GPG_KEY_ID="8174245629A3C612E8797E0304E952757DA5F0B2" \
-  ./scripts/build-release.sh 1.2.0
+  ./scripts/build-release.sh 1.2.1
 ```
 
 The build fails unless the private key, committed public key, and pinned
