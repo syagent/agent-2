@@ -264,14 +264,22 @@ verify_release_signature() {
 remove_agent_cron() {
   local cron_user="$1"
   local existing_cron
+  local filtered_cron
 
   command -v crontab >/dev/null 2>&1 || return 0
   id -u "$cron_user" >/dev/null 2>&1 || return 0
 
   existing_cron="$(crontab -u "$cron_user" -l 2>/dev/null || true)"
-  printf '%s\n' "$existing_cron" |
-    grep -v -F "/etc/syAgent/sh-agent.sh" |
-    crontab -u "$cron_user" -
+  filtered_cron="$(
+    printf '%s\n' "$existing_cron" |
+      grep -v -F "/etc/syAgent/sh-agent.sh" || true
+  )"
+
+  if [ -n "$filtered_cron" ]; then
+    printf '%s\n' "$filtered_cron" | crontab -u "$cron_user" -
+  else
+    crontab -u "$cron_user" -r 2>/dev/null || true
+  fi
 }
 
 install_systemd_runtime() {
