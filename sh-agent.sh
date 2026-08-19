@@ -1,11 +1,17 @@
 #!/bin/bash
-# @version		1.2.1
+# @version		1.2.2
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-version="1.2.1"
+# Force a "." decimal separator: comma-decimal locales make awk print "0,000",
+# which splits the comma-separated key:value payload fields.
+LC_ALL=C
+LC_NUMERIC=C
+export LC_ALL LC_NUMERIC
+
+version="1.2.2"
 dry_run=false
 check_only=false
 
@@ -793,10 +799,10 @@ done
 if [ -n "$auth_logs" ]; then
   success_attempts=$(grep 'Accepted password for\|Accepted publickey for' $auth_logs 2>/dev/null | wc -l)
   failed_attempts=$(grep 'Failed password for\|Failed publickey for' $auth_logs 2>/dev/null | wc -l)
-else
-  success_attempts=0
-  failed_attempts=0
 fi
+
+success_attempts=$(to_num "$(sed_rt "$success_attempts")")
+failed_attempts=$(to_num "$(sed_rt "$failed_attempts")")
 
 
 
